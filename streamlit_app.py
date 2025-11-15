@@ -1,5 +1,5 @@
 import streamlit as st
 
-st.title('🎈 App Name')
+st.title('SONATRACH CA PREDECTION')
 
-st.write('Hello world!')
+st.infel('ML RO APP')
