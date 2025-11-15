@@ -4,4 +4,4 @@ numpy
 seaborn
 matplotlib
 pulp
-sickit-learn
+scickit-learn
