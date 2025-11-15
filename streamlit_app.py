@@ -1,103 +1,144 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
 from pulp import *
 
 # --- 1. CONFIGURATION ET TITRE ---
-st.set_page_config(layout="wide")
-st.title("Système Intelligent de Prévision et Optimisation des Risques")
-st.subheader("Démo pour votre Encadrant : Intégration IA (Prévision) et RO (Décision)")
-st.caption("Projet : Rupture de la Chaîne Logistique dans l'Industrie Pétrolière et Gazière")
+st.set_page_config(
+    layout="wide", 
+    page_title="Démo IA + RO Logistique", 
+    initial_sidebar_state="expanded" # Ouvre le menu latéral
+)
+
+st.title("🛡️ Système Intelligent de Prévision et Optimisation des Risques")
+st.subheader("Démonstration : L'IA nourrit la Décision RO")
+st.caption("Projet : Optimisation de la Chaîne Logistique dans l'Industrie Pétrolière et Gazière")
+
+# --- MENU LATÉRAL POUR LA SÉLECTION DE DONNÉES ---
+with st.sidebar:
+    st.header("Paramètres de l'Exemple")
+    
+    # Bouton pour charger les données de votre exemple (Ventes 6 mois)
+    if st.button("Charger l'Exemple 'Ventes sur 6 Mois'", help="Charge les données initiales : 120, 132, 148, 165, 185, 208"):
+        st.session_state['vendu'] = [120, 132, 148, 165, 185, 208]
+    
+    # Entrée manuelle des données (pour plus de flexibilité)
+    vendu_str = st.text_area(
+        "Saisir les 6 dernières Ventes (séparées par des virgules) :",
+        value=", ".join(map(str, st.session_state.get('vendu', [120, 132, 148, 165, 185, 208]))),
+        key='input_ventes'
+    )
+    
+    try:
+        ventes_actuelles = [int(x.strip()) for x in vendu_str.split(',') if x.strip()]
+        if len(ventes_actuelles) != 6:
+            st.error("Veuillez saisir exactement 6 valeurs.")
+            st.stop()
+    except ValueError:
+        st.error("Veuillez saisir uniquement des nombres entiers séparés par des virgules.")
+        st.stop()
+
+# --- DÉCLENCHEMENT DE L'ANALYSE ---
 st.write("---")
+st.header("🎯 Analyse des Ventes et Prévision de la Demande")
 
-# --- 2. MODULE IA SIMULÉ (PRÉVISION) ---
-st.header("🟢 Module IA (Entrée) : Prévision du Risque de Panne")
-st.markdown("*(Simule la sortie d'un modèle d'IA (XGBoost ou LSTM) basé sur les données de maintenance prédictive)*")
+# 1. ANALYSE ET PRÉVISION (SIMULATION IA)
+df_ventes = pd.DataFrame({
+    'Mois': range(1, 7),
+    'Ventes (k unités)': ventes_actuelles
+})
 
-# Le Slider simule le résultat de votre modèle d'IA
-probabilite_defaillance_pct = st.slider(
-    "Probabilité Prédite de Défaillance de la Pompe dans les 30 Jours (%)",
-    min_value=5, max_value=80, value=25, step=5,
-)
-probabilite_defaillance = probabilite_defaillance_pct / 100.0  # Convertir en décimal
+# Calcul de la Demande Moyenne pour la prévision simplifiée
+demande_moyenne = np.mean(ventes_actuelles)
+facteur_tendance = (ventes_actuelles[-1] - ventes_actuelles[0]) / 5
+prevision_prochain_mois = demande_moyenne + facteur_tendance
 
-st.metric(
-    label="Probabilité de Défaillance (P_defaillance)",
-    value=f"{probabilite_defaillance * 100:.1f}%",
-    delta_color="off"
-)
+# SIMULATION IA : Calculer la "Probabilité de forte demande" basée sur la tendance.
+# Si la tendance est très forte, le risque de rupture est plus élevé.
+probabilite_defaillance_pct = min(80, max(5, int(facteur_tendance * 2))) / 100.0 # Simule le risque
 
-# --- 3. DÉFINITION DES PARAMÈTRES RO (COÛTS) ---
-# Ces paramètres sont des données fixes de l'entreprise
-cout_piece = 1500.0       
-cout_rupture = 50000.0    # Coût très élevé pour une rupture de production
+# 2. AFFICHAGE DU TABLEAU DE BORD (Partie IA)
+colA, colB = st.columns([1, 2])
 
-st.subheader("Paramètres de Coût (Entrées RO) :")
-col1, col2 = st.columns(2)
-col1.metric("Coût Unitaire de la Pièce (Stockage)", f"{cout_piece:.0f} €")
-col2.metric("Coût d'une Rupture/Panne (Impact)", f"{cout_rupture:.0f} €")
+with colA:
+    st.markdown("#### 📊 Aperçu des Données")
+    st.dataframe(df_ventes, hide_index=True, width=350)
 
-# --- 4. MODULE RO (OPTIMISATION) ---
-# Utilisation de @st.cache_data pour ne recalculer que si le slider bouge
+    # Métriques de Prévision IA
+    st.markdown("#### 🧠 Prévisions et Risque (Module IA)")
+    st.metric(label="Moyenne des Ventes Historiques", value=f"{demande_moyenne:.0f} k unités")
+    st.metric(label="Prévision du Prochain Mois", value=f"{prevision_prochain_mois:.0f} k unités")
+    st.metric(
+        label="🔥 Risque de Rupture Prédit (P_rupture)",
+        value=f"{probabilite_defaillance_pct * 100:.1f}%",
+        delta="Déterminé par la force de la tendance",
+        delta_color="normal"
+    )
+
+with colB:
+    st.markdown("#### Évolution des Ventes")
+    st.line_chart(df_ventes, x='Mois', y='Ventes (k unités)', use_container_width=True)
+
+
+# --- 3. MODULE RO (OPTIMISATION) ---
+st.write("---")
+st.header("⚖️ Optimisation de la Contre-Mesure (Module RO)")
+
+# --- Paramètres de Coût (Utilisés pour PuLP) ---
+cout_piece = 10.0       # Coût unitaire pour simplifier (k unités)
+cout_rupture = 500.0    # Coût très élevé de la rupture (k unités)
+
+# Modèle de Recherche Opérationnelle
 @st.cache_data
-def optimiser_stock(P_defaillance, C_piece, C_rupture):
-    """Calcule le stock de sécurité optimal en minimisant les coûts totaux."""
-    
+def optimiser_stock(P_rupture, P_demande, C_piece, C_rupture):
     prob = LpProblem("Optimisation_Stock_Securite", LpMinimize)
-
-    # Variable de décision : Stock de Sécurité (S)
-    S = LpVariable("Stock_Securite", lowBound=0, upBound=20, cat='Integer')
+    S = LpVariable("Stock_Securite", lowBound=0, upBound=50, cat='Integer')
     
-    # PARAMÈTRES DU MODÈLE RO SIMPLIFIÉ
     taux_detention_annuel = 0.10  
-    max_stock_hypothetique = 20.0 
+    max_stock_hypothetique = 50.0 
 
-    # OBJECTIF : Minimiser Coût Total = Coût de Stockage + Coût du Risque Résiduel
-    
-    # Coût de Stockage
+    # OBJECTIF : Minimiser Coût Total = Coût de Stockage + Coût du Risque
     cout_stockage = S * C_piece * taux_detention_annuel 
-
-    # Coût du Risque Résiduel (simplifié pour démo): P_defaillance * Coût Rupture * (1 - S / Max_Stock)
-    # Rendu linéaire pour PuLP
-    cout_risque_residuel = P_defaillance * C_rupture * (1 - S * (1 / max_stock_hypothetique))
+    cout_risque_residuel = P_rupture * C_rupture * (1 - S * (1 / max_stock_hypothetique))
     
     prob += cout_stockage + cout_risque_residuel, "Minimisation_Cout_Total"
 
-    # CONTRAINTES (Le stock minimum augmente avec le risque prédit par l'IA)
-    if P_defaillance > 0.30:
-         prob += S >= 4, "Contrainte_Service_Haut_Risque"
-    elif P_defaillance > 0.10:
-         prob += S >= 2, "Contrainte_Service_Moyen_Risque" 
-    else:
-         prob += S >= 1, "Contrainte_Service_Bas_Risque" 
+    # CONTRAINTE : Le stock doit couvrir au moins la prévision moyenne plus 50% du risque.
+    prob += S >= (P_demande / 1000) * (1 + P_rupture * 0.5), "Contrainte_Service_Minimum"
 
-    # Résolution du problème
     prob.solve(PULP_CBC_CMD(msg=0)) 
 
-    # Retourner le résultat
     if LpStatus[prob.status] == "Optimal":
         return value(S), value(prob.objective)
     else:
         return "Échec", 0
 
-# --- 5. EXÉCUTION ET AFFICHAGE DES RÉSULTATS ---
-stock_optimal, cout_total_min = optimiser_stock(probabilite_defaillance, cout_piece, cout_rupture)
+# Exécution
+stock_optimal, cout_total_min = optimiser_stock(
+    probabilite_defaillance_pct, 
+    prevision_prochain_mois, 
+    cout_piece, 
+    cout_rupture
+)
 
-st.write("---")
-st.header("🔴 Module RO (Sortie) : Décision Optimale (Prescription)")
+# 4. AFFICHAGE DES RÉSULTATS (Partie RO)
+colC, colD = st.columns(2)
 
-col3, col4 = st.columns(2)
-
-if stock_optimal != "Échec":
-    col3.metric(
-        label="Stock de Sécurité Optimal Recommandé",
-        value=f"{int(stock_optimal)} unités",
+with colC:
+    st.metric(
+        label="Stock de Sécurité Optimal Recommandé (RO)",
+        value=f"{int(stock_optimal):.0f} k unités",
         delta="Décision Prescriptive",
         delta_color="normal"
     )
-    col4.metric(
-        label="Coût Total Minimisé (Stock + Risque Résiduel)",
-        value=f"{cout_total_min:.2f} €",
+
+with colD:
+    st.metric(
+        label="Coût Total Minimum Attendu",
+        value=f"{cout_total_min:.2f} k €",
     )
     
-    st.info(f"**Analyse :** Pour un risque de défaillance de **{probabilite_defaillance_pct}%**, le système recommande un stock de **{int(stock_optimal)}** pièces pour minimiser le coût total à **{cout_total_min:.2f} €**.")
-else:
-    st.error("Le solveur PuLP n'a pas pu trouver une solution optimale. Vérifiez la formulation du modèle.")
+st.write("---")
+st.success("""
+**Conclusion de la Démo :** Le système a analysé la demande passée (IA), prédit le risque de rupture, et a utilisé la Recherche Opérationnelle (RO) pour fournir la **décision la plus économique** (quantité à commander) afin de couvrir ce risque.
+""")
