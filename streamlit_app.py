@@ -9,7 +9,7 @@ import numpy as np
 COUT_STOCK_UNITAIRE = 5.0    # Coût de stockage d'une pièce pendant une période (DIN/jour)
 COUT_RUPTURE_UNITAIRE = 50.0 # Coût estimé d'une rupture de stock (perte de production, urgence)
 DEMANDE_MOYENNE_JOUR = 0.5   # En moyenne, 0.5 pièce est nécessaire par jour
-ECART_TYPE_DEMANDE = 0.1     # Variance de la demande
+ECART_TYPE_DEMANDE = 0.1    
 
 def optimiser_stock_securite(
         stock_actuel: int, 
