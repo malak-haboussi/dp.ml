@@ -1,13 +1,37 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier # Assurez-vous d'avoir 'scikit-learn' dans requirements.txt
+from sklearn.ensemble import RandomForestClassifier
+from datetime import datetime, timedelta
 
 # --- INTÉGRATION TEMPORAIRE DU MODULE RO (Recherche Opérationnelle) ---
 COUT_STOCK_UNITAIRE = 5.0    
 COUT_RUPTURE_UNITAIRE = 50.0 
 DEMANDE_MOYENNE_JOUR = 0.5   
 ECART_TYPE_DEMANDE = 0.1     
+
+def estimer_delai_panne(vibration, temperature, heures_fonctionnement):
+    """Estime le délai probable avant panne en fonction des paramètres techniques"""
+    
+    # Facteurs de risque pondérés
+    score_vibration = max(0, (vibration - 3) / 7)  # 0-1, vibration > 3 considérée comme risquée
+    score_temperature = max(0, (temperature - 80) / 40)  # 0-1, température > 80°C risquée
+    score_heures = min(1, heures_fonctionnement / 2000)  # 0-1, proportionnel aux heures
+    
+    # Score de risque global
+    score_risque = 0.4 * score_vibration + 0.4 * score_temperature + 0.2 * score_heures
+    
+    # Conversion du score en délai estimé
+    if score_risque > 0.8:
+        return "DANS 1-7 JOURS", "CRITIQUE"
+    elif score_risque > 0.6:
+        return "DANS 8-15 JOURS", "ÉLEVÉ"
+    elif score_risque > 0.4:
+        return "DANS 16-30 JOURS", "MODÉRÉ"
+    elif score_risque > 0.2:
+        return "DANS 1-2 MOIS", "FAIBLE"
+    else:
+        return "AU-DELÀ DE 2 MOIS", "NÉGLIGEABLE"
 
 def optimiser_decision_ro(
         stock_actuel: int, 
@@ -49,7 +73,6 @@ def optimiser_decision_ro(
         "recommandation_ro": reco_finale,
     }
 
-
 # ==================== CSS ET CONFIGURATION GLOBALE ====================
 st.set_page_config(
     page_title="Système Intelligent Sonatrach", 
@@ -68,9 +91,17 @@ st.markdown("""
     .low-risk { background-color: #D4EDDA; border: 2px solid #28A745; }
     .ro-card { background-color: #E3F2FD; border: 3px solid #1976D2; padding: 20px; border-radius: 10px; margin-top: 20px; box-shadow: 0 4px 8px rgba(25, 118, 210, 0.2); }
     .stProgress > div > div > div > div { background-color: #0B2E59; }
+    .timeline-badge { 
+        background-color: #0B2E59; 
+        color: white; 
+        padding: 5px 10px; 
+        border-radius: 15px; 
+        font-size: 0.8em;
+        margin: 5px 0;
+        display: inline-block;
+    }
     </style>
     """, unsafe_allow_html=True)
-
 
 # ==================== DONNÉES D'EXEMPLE ET MISE À JOUR ====================
 
@@ -95,6 +126,7 @@ if 'df_historique' not in st.session_state:
     st.session_state.resultat_panne = None
     st.session_state.resultat_stock = None
     st.session_state.resultat_ro = None
+    st.session_state.delai_panne = None
 
 def mettre_a_jour_donnees():
     """Simule l'ajout de nouvelles données historiques et ré-entraîne le modèle."""
@@ -139,7 +171,10 @@ def executer_prediction(model_panne, model_stock, vibration, temperature, heures
         risque_panne = model_panne.predict_proba([[vibration, temperature, heures]])[0][1]
         risque_stock = model_stock.predict_proba([[stock, delai]])[0][1]
     
-    # 2. OPTIMISATION RO (Calcul de la meilleure action)
+    # 2. ESTIMATION TEMPORELLE DE LA PANNE
+    delai_panne, niveau_urgence = estimer_delai_panne(vibration, temperature, heures)
+    
+    # 3. OPTIMISATION RO (Calcul de la meilleure action)
     resultat_ro = optimiser_decision_ro(
         stock_actuel=stock,
         delai_fournisseur=delai,
@@ -150,7 +185,9 @@ def executer_prediction(model_panne, model_stock, vibration, temperature, heures
     # Mise à jour de l'état de la session
     st.session_state.resultat_panne = risque_panne
     st.session_state.resultat_stock = risque_stock
-    st.session_state.resultat_ro = resultat_ro 
+    st.session_state.resultat_ro = resultat_ro
+    st.session_state.delai_panne = delai_panne
+    st.session_state.niveau_urgence = niveau_urgence
 
 # ==================== FONCTION PRINCIPALE ====================
 def main():
@@ -168,7 +205,7 @@ def main():
     st.sidebar.write(f"Nombre d'enregistrements actuels : **{len(df)}**")
     
     # Correction de l'avertissement 'use_container_width'
-    if st.sidebar.button("🔄 Mettre à Jour les Données Historiques", width='stretch'):
+    if st.sidebar.button("🔄 Mettre à Jour les Données Historiques", use_container_width=True):
         mettre_a_jour_donnees()
         executer_prediction(
             model_panne, model_stock, 
@@ -177,7 +214,6 @@ def main():
         )
         st.rerun() 
     st.sidebar.markdown("---")
-
 
     # -----------------------------------------------------------------
     # SECTION 1: SAISIE DES PARAMÈTRES ET DÉCLENCHEMENT
@@ -209,7 +245,7 @@ def main():
             executer_prediction(model_panne, model_stock, vibration, temperature, heures, stock, delai)
             
         # Correction de l'avertissement 'use_container_width'
-        st.button("🔍 ANALYSER LES RISQUES & GÉNÉRER LA DÉCISION OPTIMALE", type="primary", width='stretch', on_click=on_analyze_click)
+        st.button("🔍 ANALYSER LES RISQUES & GÉNÉRER LA DÉCISION OPTIMALE", type="primary", use_container_width=True, on_click=on_analyze_click)
     
     # -----------------------------------------------------------------
     # EXÉCUTION INITIALE LORS DU PREMIER CHARGEMENT (Garantit l'affichage)
@@ -229,6 +265,8 @@ def main():
     risque_panne = st.session_state.resultat_panne
     risque_stock = st.session_state.resultat_stock
     resultat_ro = st.session_state.resultat_ro
+    delai_panne = st.session_state.delai_panne
+    niveau_urgence = st.session_state.niveau_urgence
 
     st.markdown("<br><h3>Résultats de l'Analyse IA</h3>", unsafe_allow_html=True)
     
@@ -253,6 +291,10 @@ def main():
         st.markdown(f"<h4>🔧 Panne Prédite : {alerte}</h4>", unsafe_allow_html=True)
         st.markdown(f"**Probabilité (IA):** **{risque_panne:.1%}**")
         st.progress(risque_panne)
+        
+        # AFFICHAGE DU DÉLAI ESTIMÉ
+        st.markdown(f"<div class='timeline-badge' style='background-color: {'#DC3545' if niveau_urgence == 'CRITIQUE' else '#FFC107' if niveau_urgence == 'ÉLEVÉ' else '#28A745'};'>⏱️ {delai_panne}</div>", unsafe_allow_html=True)
+        
         st.markdown(f"<p><strong>Décision Opérationnelle:</strong> {action}</p>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -298,10 +340,10 @@ def main():
         st.markdown(f"- Risque de Panne (IA) : {risque_panne:.1%}")
         st.markdown(f"- Risque de Rupture (IA) : {risque_stock:.1%}")
         st.markdown(f"- Demande journalière ajustée : {resultat_ro['demande_ajustee_jour']:.2f} unités.")
+        st.markdown(f"- Délai estimé avant panne : **{delai_panne}**")
 
     st.markdown(f"**Conclusion RO :** **{resultat_ro['recommandation_ro']}**", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-
 
     # -----------------------------------------------------------------
     # SECTION 3: TABLEAU DE BORD GLOBAL
@@ -316,7 +358,7 @@ def main():
     
     # Correction de l'avertissement FutureWarning (Styler.applymap -> Styler.map)
     styled_df = df.style.map(style_risque, subset=['risque_panne', 'risque_rupture_stock'])
-    st.dataframe(styled_df, width='stretch', height=250)
+    st.dataframe(styled_df, use_container_width=True, height=250)
     
     st.markdown("---")
     st.caption("PFE Sonatrach - Intégration IA et RO")
