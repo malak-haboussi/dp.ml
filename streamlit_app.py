@@ -126,7 +126,8 @@ if 'df_historique' not in st.session_state:
     st.session_state.resultat_panne = None
     st.session_state.resultat_stock = None
     st.session_state.resultat_ro = None
-    st.session_state.delai_panne = None
+    st.session_state.delai_panne = "NON CALCULÉ"  # Initialisation ajoutée
+    st.session_state.niveau_urgence = "INCONNU"   # Initialisation ajoutée
 
 def mettre_a_jour_donnees():
     """Simule l'ajout de nouvelles données historiques et ré-entraîne le modèle."""
@@ -166,7 +167,6 @@ def executer_prediction(model_panne, model_stock, vibration, temperature, heures
     """Effectue la prédiction IA et le calcul RO, puis met à jour l'état de la session."""
     
     # 1. PRÉDICTION IA (Probabilités de risque)
-    # Suppression du warning scikit-learn
     with st.spinner("Analyse en cours..."):
         risque_panne = model_panne.predict_proba([[vibration, temperature, heures]])[0][1]
         risque_stock = model_stock.predict_proba([[stock, delai]])[0][1]
@@ -204,7 +204,6 @@ def main():
     st.sidebar.header("Gestion des Données Historiques")
     st.sidebar.write(f"Nombre d'enregistrements actuels : **{len(df)}**")
     
-    # Correction de l'avertissement 'use_container_width'
     if st.sidebar.button("🔄 Mettre à Jour les Données Historiques", use_container_width=True):
         mettre_a_jour_donnees()
         executer_prediction(
@@ -244,7 +243,6 @@ def main():
             st.session_state.delai_val = delai
             executer_prediction(model_panne, model_stock, vibration, temperature, heures, stock, delai)
             
-        # Correction de l'avertissement 'use_container_width'
         st.button("🔍 ANALYSER LES RISQUES & GÉNÉRER LA DÉCISION OPTIMALE", type="primary", use_container_width=True, on_click=on_analyze_click)
     
     # -----------------------------------------------------------------
@@ -293,7 +291,8 @@ def main():
         st.progress(risque_panne)
         
         # AFFICHAGE DU DÉLAI ESTIMÉ
-        st.markdown(f"<div class='timeline-badge' style='background-color: {'#DC3545' if niveau_urgence == 'CRITIQUE' else '#FFC107' if niveau_urgence == 'ÉLEVÉ' else '#28A745'};'>⏱️ {delai_panne}</div>", unsafe_allow_html=True)
+        badge_color = "#DC3545" if niveau_urgence == "CRITIQUE" else "#FFC107" if niveau_urgence == "ÉLEVÉ" else "#28A745"
+        st.markdown(f"<div class='timeline-badge' style='background-color: {badge_color};'>⏱️ {delai_panne}</div>", unsafe_allow_html=True)
         
         st.markdown(f"<p><strong>Décision Opérationnelle:</strong> {action}</p>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -356,7 +355,6 @@ def main():
         else:
             return 'background-color: #D4EDDA; color: #28A745'
     
-    # Correction de l'avertissement FutureWarning (Styler.applymap -> Styler.map)
     styled_df = df.style.map(style_risque, subset=['risque_panne', 'risque_rupture_stock'])
     st.dataframe(styled_df, use_container_width=True, height=250)
     
