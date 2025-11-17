@@ -10,8 +10,8 @@ COUT_RUPTURE_UNITAIRE = 50.0   # Coût d'une rupture de stock
 DEMANDE_MOYENNE_JOUR = 0.5     # Demande moyenne historique
 ECART_TYPE_DEMANDE = 0.2       # Variabilité de la demande
 
-def calculer_cout_total(stock_actuel, stock_cible, probabilite_rupture):
-    """Calcule le coût total pour différents scénarios de stock"""
+def calculer_cout_total(stock_cible, probabilite_rupture):
+    """Calcule le coût total pour un niveau de stock donné"""
     
     # Coût de possession du stock
     cout_possession = stock_cible * COUT_STOCK_UNITAIRE
@@ -37,28 +37,26 @@ def optimiser_decision_ro(
     """OPTIMISATION RO AVEC CALCUL ÉCONOMIQUE COMPLET"""
     
     # 1. Ajustement intelligent de la demande basé sur le risque de panne
-    facteur_risque_panne = 1.0 + (probabilite_panne_ia * 0.8)  # Impact plus fort
+    facteur_risque_panne = 1.0 + (probabilite_panne_ia * 0.8)
     demande_ajustee = DEMANDE_MOYENNE_JOUR * facteur_risque_panne
     
     # 2. Calcul du besoin pendant le délai de livraison
     besoin_delai = demande_ajustee * delai_fournisseur
     
-    # 3. Stock de sécurité basé sur le risque de rupture et la variabilité
+    # 3. Stock de sécurité basé sur le risque de rupture
     z_score = 1.96  # Pour 95% de niveau de service
     stock_securite = (z_score * ECART_TYPE_DEMANDE * np.sqrt(delai_fournisseur) + 
                      probabilite_rupture_ia * 8)
     
     # 4. Stock cible optimal
-    stock_cible_optimal = max(besoin_delai + stock_securite, 5)  # Minimum 5 unités
+    stock_cible_optimal = max(besoin_delai + stock_securite, 5)
     
     # 5. CALCUL ÉCONOMIQUE - Comparaison des scénarios
-    scenarios = []
-    
     # Scénario 1 : Commander pour atteindre le stock optimal
-    cout_commande = calculer_cout_total(stock_actuel, stock_cible_optimal, probabilite_rupture_ia)
+    cout_commande = calculer_cout_total(stock_cible_optimal, probabilite_rupture_ia)
     
     # Scénario 2 : Ne rien commander (garder stock actuel)
-    cout_actuel = calculer_cout_total(stock_actuel, stock_actuel, probabilite_rupture_ia)
+    cout_actuel = calculer_cout_total(stock_actuel, probabilite_rupture_ia)
     
     # 6. Décision optimale basée sur les coûts
     economie_potentielle = cout_actuel['cout_total'] - cout_commande['cout_total']
@@ -72,13 +70,14 @@ def optimiser_decision_ro(
         recommandation = f"✅ **Maintenir stock actuel** (Optimal économique)"
         decision_optimale = "MAINTENIR"
     
+    # RETOURNER TOUTES LES CLÉS NÉCESSAIRES
     return {
-        "demande_ajustee_jour": demande_ajustee,
-        "besoin_delai_livraison": besoin_delai,
-        "stock_securite_calcule": stock_securite,
-        "stock_cible_optimal": stock_cible_optimal,
-        "quantite_a_commander": quantite_commander,
-        "recommandation_ro": recommandation,
+        "demande_ajustee": demande_ajustee,
+        "besoin_delai": besoin_delai,
+        "stock_securite": stock_securite,
+        "stock_cible_optimal": stock_cible_optimal,  # CLÉ CORRIGÉE
+        "quantite_commander": quantite_commander,
+        "recommandation": recommandation,
         "decision_optimale": decision_optimale,
         "analyse_economique": {
             "scenario_commande": cout_commande,
@@ -88,17 +87,14 @@ def optimiser_decision_ro(
     }
 
 def estimer_delai_panne(vibration, temperature, heures_fonctionnement):
-    """Estime le délai probable avant panne en fonction des paramètres techniques"""
+    """Estime le délai probable avant panne"""
     
-    # Facteurs de risque pondérés
     score_vibration = max(0, (vibration - 3) / 7)
     score_temperature = max(0, (temperature - 80) / 40)
     score_heures = min(1, heures_fonctionnement / 2000)
     
-    # Score de risque global
     score_risque = 0.4 * score_vibration + 0.4 * score_temperature + 0.2 * score_heures
     
-    # Conversion du score en délai estimé
     if score_risque > 0.8:
         return "DANS 1-7 JOURS", "CRITIQUE"
     elif score_risque > 0.6:
@@ -110,7 +106,7 @@ def estimer_delai_panne(vibration, temperature, heures_fonctionnement):
     else:
         return "AU-DELÀ DE 2 MOIS", "NÉGLIGEABLE"
 
-# ==================== CSS ET CONFIGURATION ====================
+# ==================== CONFIGURATION ====================
 st.set_page_config(
     page_title="Système Intelligent Sonatrach", 
     layout="wide",
@@ -131,12 +127,10 @@ st.markdown("""
         background-color: #0B2E59; color: white; padding: 5px 10px; 
         border-radius: 15px; font-size: 0.8em; margin: 5px 0; display: inline-block;
     }
-    .cout-positive { color: #28A745; font-weight: bold; }
-    .cout-negative { color: #DC3545; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# ==================== DONNÉES ET INITIALISATION ====================
+# ==================== INITIALISATION ====================
 
 if 'df_historique' not in st.session_state:
     st.session_state.df_historique = pd.DataFrame({
@@ -150,15 +144,28 @@ if 'df_historique' not in st.session_state:
         'risque_rupture_stock': [0, 1, 0, 1, 1]
     })
     
-    # Initialisation
+    # Initialisation des variables de session
     st.session_state.vibration_val = 5.0
     st.session_state.temperature_val = 85
     st.session_state.heures_val = 1000
     st.session_state.stock_val = 10
     st.session_state.delai_val = 7
-    st.session_state.resultat_panne = None
-    st.session_state.resultat_stock = None
-    st.session_state.resultat_ro = None
+    st.session_state.resultat_panne = 0.0
+    st.session_state.resultat_stock = 0.0
+    st.session_state.resultat_ro = {
+        "stock_cible_optimal": 0,
+        "quantite_commander": 0,
+        "recommandation": "En attente d'analyse...",
+        "demande_ajustee": 0,
+        "besoin_delai": 0,
+        "stock_securite": 0,
+        "decision_optimale": "EN ATTENTE",
+        "analyse_economique": {
+            "scenario_commande": {"cout_total": 0},
+            "scenario_actuel": {"cout_total": 0},
+            "economie_potentielle": 0
+        }
+    }
     st.session_state.delai_panne = "NON CALCULÉ"
     st.session_state.niveau_urgence = "INCONNU"
 
@@ -205,7 +212,7 @@ def executer_prediction(model_panne, model_stock, vibration, temperature, heures
     # Estimation temporelle
     delai_panne, niveau_urgence = estimer_delai_panne(vibration, temperature, heures)
     
-    # OPTIMISATION RO AVEC CALCUL ÉCONOMIQUE
+    # OPTIMISATION RO
     resultat_ro = optimiser_decision_ro(stock, delai, risque_stock, risque_panne)
     
     # Mise à jour session
@@ -259,7 +266,7 @@ def main():
         st.button("🔍 ANALYSER ET OPTIMISER", type="primary", use_container_width=True, on_click=on_analyze_click)
     
     # EXÉCUTION INITIALE
-    if st.session_state.resultat_panne is None:
+    if st.session_state.resultat_panne == 0.0:  # Vérification corrigée
         executer_prediction(
             model_panne, model_stock, 
             st.session_state.vibration_val, st.session_state.temperature_val, st.session_state.heures_val,
@@ -307,7 +314,7 @@ def main():
         st.markdown(f"<h4>📦 Rupture Prédite : {alerte}</h4>", unsafe_allow_html=True)
         st.markdown(f"**Probabilité IA:** **{risque_stock:.1%}**")
         st.progress(risque_stock)
-        st.markdown(f"**Décision RO:** {resultat_ro['recommandation_ro']}")
+        st.markdown(f"**Décision RO:** {resultat_ro['recommandation']}")
         st.markdown("</div>", unsafe_allow_html=True)
     
     # SECTION 3: OPTIMISATION RO DÉTAILLÉE
@@ -320,14 +327,14 @@ def main():
         
         with col_ro1:
             st.metric("Stock Cible Optimal", f"{resultat_ro['stock_cible_optimal']:.1f} unités")
-            st.metric("Quantité à Commander", f"{resultat_ro['quantite_a_commander']} unités")
+            st.metric("Quantité à Commander", f"{resultat_ro['quantite_commander']} unités")
             st.metric("Décision Optimale", resultat_ro['decision_optimale'])
             
         with col_ro2:
             st.markdown("**Calculs RO :**")
-            st.markdown(f"- Demande ajustée: {resultat_ro['demande_ajustee_jour']:.2f} unités/jour")
-            st.markdown(f"- Besoin délai: {resultat_ro['besoin_delai_livraison']:.1f} unités")
-            st.markdown(f"- Stock sécurité: {resultat_ro['stock_securite_calcule']:.1f} unités")
+            st.markdown(f"- Demande ajustée: {resultat_ro['demande_ajustee']:.2f} unités/jour")
+            st.markdown(f"- Besoin délai: {resultat_ro['besoin_delai']:.1f} unités")
+            st.markdown(f"- Stock sécurité: {resultat_ro['stock_securite']:.1f} unités")
         
         st.markdown("</div>", unsafe_allow_html=True)
     
