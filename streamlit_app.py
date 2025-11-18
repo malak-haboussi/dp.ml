@@ -34,7 +34,7 @@ def optimiser_decision_ro(
         probabilite_rupture_ia: float, 
         probabilite_panne_ia: float
 ) -> dict:
-    """OPTIMISATION RO AVEC CALCUL ÉCONOMIQUE COMPLET"""
+    """OPTIMISATION RO CORRIGÉE - Logique prioritaire"""
     
     # 1. Ajustement intelligent de la demande basé sur le risque de panne
     facteur_risque_panne = 1.0 + (probabilite_panne_ia * 0.8)
@@ -58,24 +58,46 @@ def optimiser_decision_ro(
     # Scénario 2 : Ne rien commander (garder stock actuel)
     cout_actuel = calculer_cout_total(stock_actuel, probabilite_rupture_ia)
     
-    # 6. Décision optimale basée sur les coûts
+    # 6. Décision optimale basée sur les coûts ET la sécurité
     economie_potentielle = cout_actuel['cout_total'] - cout_commande['cout_total']
     
-    if economie_potentielle > 0 and stock_cible_optimal > stock_actuel:
+    # CORRECTION : Logique prioritaire pour les risques élevés
+    quantite_commander = 0
+    recommandation = ""
+    decision_optimale = "MAINTENIR"
+    
+    # PRIORITÉ 1 : Risque de rupture CRITIQUE - Commander IMMÉDIATEMENT
+    if probabilite_rupture_ia > 0.7:
+        quantite_commander = max(1, int(np.ceil(stock_cible_optimal - stock_actuel)))
+        recommandation = f"🚨 **Commander {quantite_commander} unités URGENT** (Rupture imminente - {probabilite_rupture_ia:.0%})"
+        decision_optimale = "COMMANDER URGENT"
+    
+    # PRIORITÉ 2 : Risque de panne ÉLEVÉ et stock insuffisant
+    elif probabilite_panne_ia > 0.6 and stock_actuel < stock_cible_optimal:
+        quantite_commander = int(np.ceil(stock_cible_optimal - stock_actuel))
+        recommandation = f"⚡ **Commander {quantite_commander} unités** (Anticipation panne - {probabilite_panne_ia:.0%})"
+        decision_optimale = "COMMANDER"
+    
+    # PRIORITÉ 3 : Économie potentielle significative
+    elif economie_potentielle > 0 and stock_cible_optimal > stock_actuel:
         quantite_commander = int(np.ceil(stock_cible_optimal - stock_actuel))
         recommandation = f"🚀 **Commander {quantite_commander} unités** (Économie: {economie_potentielle:.1f}€)"
         decision_optimale = "COMMANDER"
+    
+    # CAS : Stock déjà optimal ou situation stable
     else:
         quantite_commander = 0
-        recommandation = f"✅ **Maintenir stock actuel** (Optimal économique)"
+        if stock_actuel >= stock_cible_optimal:
+            recommandation = f"✅ **Maintenir stock actuel** (Niveau optimal atteint)"
+        else:
+            recommandation = f"✅ **Maintenir stock actuel** (Situation stable)"
         decision_optimale = "MAINTENIR"
     
-    # RETOURNER TOUTES LES CLÉS NÉCESSAIRES
     return {
         "demande_ajustee": demande_ajustee,
         "besoin_delai": besoin_delai,
         "stock_securite": stock_securite,
-        "stock_cible_optimal": stock_cible_optimal,  # CLÉ CORRIGÉE
+        "stock_cible_optimal": stock_cible_optimal,
         "quantite_commander": quantite_commander,
         "recommandation": recommandation,
         "decision_optimale": decision_optimale,
@@ -123,6 +145,7 @@ st.markdown("""
     .low-risk { background-color: #D4EDDA; border: 2px solid #28A745; }
     .ro-card { background-color: #E3F2FD; border: 3px solid #1976D2; padding: 20px; border-radius: 10px; margin-top: 20px; }
     .economie-card { background-color: #E8F5E8; border: 2px solid #28A745; padding: 15px; border-radius: 10px; }
+    .urgence-card { background-color: #FFE6E6; border: 2px solid #DC3545; padding: 15px; border-radius: 10px; }
     .timeline-badge { 
         background-color: #0B2E59; color: white; padding: 5px 10px; 
         border-radius: 15px; font-size: 0.8em; margin: 5px 0; display: inline-block;
@@ -335,6 +358,14 @@ def main():
             st.markdown(f"- Demande ajustée: {resultat_ro['demande_ajustee']:.2f} unités/jour")
             st.markdown(f"- Besoin délai: {resultat_ro['besoin_delai']:.1f} unités")
             st.markdown(f"- Stock sécurité: {resultat_ro['stock_securite']:.1f} unités")
+        
+        # ALERTE SI RISQUE ÉLEVÉ MAIS PAS DE COMMANDE
+        if (risque_stock > 0.7 or risque_panne > 0.7) and resultat_ro['quantite_commander'] == 0:
+            st.markdown("<div class='urgence-card'>", unsafe_allow_html=True)
+            st.markdown("### ⚠️ ATTENTION : Risque élevé détecté")
+            st.markdown(f"- Risque rupture: {risque_stock:.1%} | Risque panne: {risque_panne:.1%}")
+            st.markdown("**Vérification recommandée** : Le stock actuel pourrait être insuffisant malgré l'optimisation")
+            st.markdown("</div>", unsafe_allow_html=True)
         
         st.markdown("</div>", unsafe_allow_html=True)
     
