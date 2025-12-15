@@ -12,14 +12,13 @@ from statsmodels.tsa.stattools import adfuller, kpss
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from scipy.stats import shapiro
 
-from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.linear_model import LinearRegression
 from numpy import sqrt
 
-
-# ==========================================================
-# 1. FONCTIONS
-# ==========================================================
+# =============================
+# 1. FONCTIONS UTILITAIRES
+# =============================
 
 def calculate_metrics(y_true, y_pred, resid=None):
     mse = mean_squared_error(y_true, y_pred)
@@ -55,109 +54,85 @@ def calculate_metrics(y_true, y_pred, resid=None):
     }
 
 
-# ==========================================================
-# 2. STREAMLIT & LOG
-# ==========================================================
+# =============================
+# 2. CONFIG STREAMLIT & LOG
+# =============================
 
 st.set_page_config(page_title="Prévision de Séries Temporelles", layout="wide")
 
 if "log" not in st.session_state:
     st.session_state["log"] = ""
 
-def append_to_log(msg):
+def log(msg):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state["log"] += f"[{ts}] {msg}\n"
 
 
 st.title("📈 Application d’Analyse et de Prévision de Séries Temporelles")
-append_to_log("Démarrage de l'application")
 
+log("Démarrage de l'application")
 
-# ==========================================================
+# =============================
 # 3. BARRE LATÉRALE
-# ==========================================================
+# =============================
 
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("⚙️ Paramètres")
 
     uploaded_file = st.file_uploader("Importer un dataset (CSV)", type=["csv"])
 
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
-        append_to_log(f"Fichier importé : {uploaded_file.name}")
+        log(f"Fichier chargé : {uploaded_file.name}")
 
         date_col = st.selectbox("Colonne Date", df.columns)
         target_col = st.selectbox("Colonne Cible", df.columns)
 
-        resample_freq = st.selectbox("Fréquence temporelle", ["D", "W", "M"])
-        agg_method = st.selectbox("Méthode d’agrégation", ["sum", "mean"])
+        resample_freq = st.selectbox("Fréquence", ["D", "W", "M"])
+        agg_method = st.selectbox("Agrégation", ["sum", "mean"])
 
-        period = st.number_input("Période saisonnière (P)", min_value=1, value=7)
-        train_ratio = st.slider("Proportion Train (%)", 60, 90, 80) / 100
+        period = st.number_input("Période saisonnière", min_value=1, value=7)
+        train_ratio = st.slider("Train (%)", 60, 90, 80) / 100
         horizon = st.number_input("Horizon de prévision", min_value=1, value=period * 2)
 
         run = st.button("🚀 Lancer l'analyse")
 
 
-# ==========================================================
-# 4. PIPELINE PRINCIPAL
-# ==========================================================
+# =============================
+# 4. TRAITEMENT PRINCIPAL
+# =============================
 
 if uploaded_file and run and date_col != target_col:
 
     with st.spinner("Analyse en cours..."):
 
-        # ==================================================
-        # PRÉTRAITEMENT ROBUSTE (ANTI-DUPLICATES)
-        # ==================================================
-
-        append_to_log("Prétraitement des données")
+        # ---------- PRÉTRAITEMENT (CORRIGÉ) ----------
+        log("Prétraitement des données")
 
         df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-        df = df.dropna(subset=[date_col, target_col])
+        df.dropna(subset=[date_col], inplace=True)
 
-        # 🔒 Agrégation initiale
-        df_grouped = (
-            df
-            .groupby(date_col, as_index=False)[target_col]
-            .agg(agg_method)
-        )
+        # 🔥 CORRECTION MAJEURE : groupby AVANT resample
+        df_grouped = df.groupby(date_col)[target_col].agg(agg_method)
+        log(f"Agrégation initiale : {len(df)} lignes → {len(df_grouped)} dates uniques")
 
-        df_grouped = df_grouped.sort_values(date_col)
-        df_grouped = df_grouped.reset_index(drop=True)
-
-        ts = df_grouped.set_index(date_col)[target_col]
-
-        # Sécurité absolue
-        if not ts.index.is_unique:
-            st.error("Index temporel non unique après agrégation (erreur critique).")
-            st.stop()
-
-        # Resample conditionnel
-        try:
-            inferred_freq = pd.infer_freq(ts.index)
-        except:
-            inferred_freq = None
-
-        if inferred_freq != resample_freq:
-            ts = ts.resample(resample_freq).agg(agg_method)
+        ts = df_grouped.sort_index()
+        ts = ts.resample(resample_freq).agg(agg_method)
 
         missing = ts.isna().sum()
-        ts = ts.interpolate(method="linear")
+        ts.interpolate(method="linear", inplace=True)
 
-        append_to_log(f"Série finale : {len(ts)} observations | Manquantes interpolées : {missing}")
-        st.success("Prétraitement terminé sans doublons ✔️")
+        log(f"Valeurs manquantes interpolées : {missing}")
 
-        # ==================================================
-        # TRAIN / TEST
-        # ==================================================
+        st.success(f"Série prête : {len(ts)} observations")
 
+        # ---------- TRAIN / TEST ----------
         train_size = int(len(ts) * train_ratio)
-        train, test = ts.iloc[:train_size], ts.iloc[train_size:]
+        train, test = ts[:train_size], ts[train_size:]
 
-        # ==================================================
-        # ANALYSE EXPLORATOIRE
-        # ==================================================
+        # =============================
+        # 5. ANALYSE EXPLORATOIRE
+        # =============================
 
         st.header("1️⃣ Analyse Exploratoire")
 
@@ -169,9 +144,9 @@ if uploaded_file and run and date_col != target_col:
         try:
             decomp = seasonal_decompose(ts, model="additive", period=period)
             st.pyplot(decomp.plot())
-            append_to_log("Décomposition saisonnière réussie")
+            log("Décomposition saisonnière réalisée")
         except Exception as e:
-            append_to_log(f"Décomposition échouée : {e}")
+            log(f"Décomposition échouée : {e}")
 
         adf_p = adfuller(ts)[1]
         kpss_p = kpss(ts)[1]
@@ -179,16 +154,16 @@ if uploaded_file and run and date_col != target_col:
         st.write(f"ADF p-value : {adf_p:.4f}")
         st.write(f"KPSS p-value : {kpss_p:.4f}")
 
-        # ==================================================
-        # MODÉLISATION
-        # ==================================================
+        # =============================
+        # 6. MODÉLISATION
+        # =============================
 
         st.header("2️⃣ Modélisation & Évaluation")
 
         results = []
         models = {}
 
-        # Régression Linéaire
+        # --- Régression Linéaire ---
         X_train = np.arange(len(train)).reshape(-1, 1)
         X_test = np.arange(len(train), len(ts)).reshape(-1, 1)
 
@@ -199,15 +174,15 @@ if uploaded_file and run and date_col != target_col:
         results.append({"Modèle": "Régression Linéaire", **metrics_lr})
         models["Régression Linéaire"] = lr
 
-        # Lissage exponentiel
-        smoothing_models = {
+        # --- Lissage ---
+        smooth_models = {
             "SES": SimpleExpSmoothing(train, initialization_method="estimated"),
             "Holt": Holt(train, initialization_method="estimated"),
             "HW Additif": ExponentialSmoothing(train, trend="add", seasonal="add", seasonal_periods=period),
             "HW Multiplicatif": ExponentialSmoothing(train, trend="add", seasonal="mul", seasonal_periods=period),
         }
 
-        for name, model in smoothing_models.items():
+        for name, model in smooth_models.items():
             try:
                 fitted = model.fit()
                 pred = fitted.forecast(len(test))
@@ -216,21 +191,21 @@ if uploaded_file and run and date_col != target_col:
                 results.append({"Modèle": name, **metrics})
                 models[name] = fitted
 
-                append_to_log(f"Modèle ajusté : {name}")
+                log(f"Modèle {name} ajusté")
             except Exception as e:
-                append_to_log(f"Erreur modèle {name} : {e}")
+                log(f"Erreur modèle {name} : {e}")
 
         results_df = pd.DataFrame(results).sort_values("MSE")
         st.dataframe(results_df)
 
         best_model_name = results_df.iloc[0]["Modèle"]
-        st.success(f"🏆 Meilleur modèle sélectionné : {best_model_name}")
+        st.success(f"🏆 Meilleur modèle : {best_model_name}")
 
-        # ==================================================
-        # PRÉVISIONS
-        # ==================================================
+        # =============================
+        # 7. PRÉVISIONS
+        # =============================
 
-        st.header("3️⃣ Prévisions Futures")
+        st.header("3️⃣ Prévisions futures")
 
         best_model = models[best_model_name]
 
@@ -243,43 +218,34 @@ if uploaded_file and run and date_col != target_col:
         forecast.name = "Prévision"
 
         future_index = pd.date_range(
-            start=ts.index[-1],
-            periods=horizon + 1,
-            freq=ts.index.freq
+            start=ts.index[-1], periods=horizon + 1, freq=ts.index.freq
         )[1:]
 
         forecast_df = pd.DataFrame(forecast.values, index=future_index, columns=["Prévision"])
 
         fig, ax = plt.subplots(figsize=(10, 4))
         ts.plot(ax=ax, label="Historique")
-        forecast_df["Prévision"].plot(ax=ax, linestyle="--", label="Prévision")
+        forecast_df["Prévision"].plot(ax=ax, label="Prévision", linestyle="--")
         ax.legend()
         st.pyplot(fig)
 
-        # ==================================================
-        # EXPORTS
-        # ==================================================
+        # =============================
+        # 8. EXPORTS
+        # =============================
 
         st.download_button(
-            "📥 Télécharger Prévisions (CSV)",
+            "📥 Télécharger les prévisions (CSV)",
             forecast_df.to_csv().encode("utf-8"),
             "previsions.csv",
-            "text/csv"
+            "text/csv",
         )
 
         st.download_button(
-            "📥 Télécharger Journal (TXT)",
+            "📥 Télécharger le journal (TXT)",
             st.session_state["log"].encode("utf-8"),
             "audit_log.txt",
-            "text/plain"
+            "text/plain",
         )
 
         st.header("📝 Journal d'exécution")
         st.code(st.session_state["log"])
-
-
-elif uploaded_file and date_col == target_col:
-    st.error("La colonne date et la colonne cible doivent être différentes.")
-
-else:
-    st.info("⬅️ Importez un dataset et lancez l’analyse.")
