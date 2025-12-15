@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.api import SimpleExpSmoothing, Holt, ExponentialSmoothing
 from statsmodels.tsa.stattools import adfuller, kpss
-from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from scipy.stats import shapiro
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -20,21 +19,33 @@ def calculate_metrics(y_true, y_pred, model_resid=None):
     mae = mean_absolute_error(y_true, y_pred)
     rmse = sqrt(mse)
     
-    # Éviter la division par zéro dans le MAPE
-    mape = np.mean(np.abs((y_true - y_pred) / y_true).replace([np.inf, -np.inf], np.nan).dropna()) * 100
+    # Calcul du MAPE, gère les zéros dans y_true
+    mape_series = np.abs((y_true - y_pred) / y_true)
+    mape = np.mean(mape_series[np.isfinite(mape_series)]) * 100
     
     # Tests sur les résidus
     ljung_box_p = None
     shapiro_p = None
-    if model_resid is not None and len(model_resid) > 1:
-        # Test de Ljung-Box
-        ljung_box_results = acorr_ljungbox(model_resid.dropna(), lags=[10], return_df=True)
-        ljung_box_p = ljung_box_results['lb_pvalue'].iloc[0]
+    
+    resid = model_resid.dropna() if model_resid is not None else pd.Series([])
+
+    if len(resid) > 1:
+        try:
+            # Test de Ljung-Box pour l'autocorrélation
+            ljung_box_results = acorr_ljungbox(resid, lags=[10], return_df=True)
+            ljung_box_p = ljung_box_results['lb_pvalue'].iloc[0]
+        except Exception:
+             ljung_box_p = np.nan
         
         # Test de Shapiro-Wilk (limité en taille)
-        if len(model_resid.dropna()) >= 3 and len(model_resid.dropna()) <= 5000: 
-            shapiro_test = shapiro(model_resid.dropna())
-            shapiro_p = shapiro_test.pvalue
+        if len(resid) >= 3 and len(resid) <= 5000: 
+            try:
+                shapiro_test = shapiro(resid)
+                shapiro_p = shapiro_test.pvalue
+            except Exception:
+                shapiro_p = np.nan
+        else:
+            shapiro_p = f"N/A (Taille: {len(resid)})"
 
     return {
         'MSE': mse, 'MAE': mae, 'RMSE': rmse, 'MAPE': mape,
@@ -42,11 +53,9 @@ def calculate_metrics(y_true, y_pred, model_resid=None):
         'Shapiro-Wilk P-value': shapiro_p
     }
 
-# --- 2. CONFIGURATION STREAMLIT ---
+# --- 2. CONFIGURATION STREAMLIT & LOGGING ---
 
 st.set_page_config(layout="wide", page_title="Application de Prévision de Séries Temporelles")
-
-# --- 3. MISE EN PLACE DU LOGGING DANS LA SESSION ---
 
 if 'log_content' not in st.session_state:
     st.session_state['log_content'] = ""
@@ -61,7 +70,7 @@ st.title("📈 Application d'Analyse et de Prévision de Séries Temporelles")
 append_to_log("--- Démarrage de la session ---")
 
 
-# --- BARRE LATÉRALE (CONFIGURATION) ---
+# --- DÉCLARATIONS INITIALES ---
 uploaded_file = None
 df = None
 date_col = None
@@ -71,45 +80,65 @@ train_ratio = 0.8
 horizon_prevision = 48
 run_analysis = False
 
+
+# --- BARRE LATÉRALE (CONFIGURATION) ---
 with st.sidebar:
     st.header("⚙️ Configuration des Données et du Modèle")
-    st.session_state['log_content'] = "" # Réinitialiser le log à chaque rechargement
+    
+    # Réinitialiser le log
+    st.session_state['log_content'] = "" 
     
     uploaded_file = st.file_uploader("Importer votre jeu de données (CSV/Excel)", type=["csv", "xlsx"])
     
     if uploaded_file is not None:
         try:
-            # Tenter de lire le fichier
+            # Lire le fichier
             df = pd.read_csv(uploaded_file)
             append_to_log(f"Fichier chargé: {uploaded_file.name}")
             
             st.subheader("Sélection des Colonnes")
             
-            # Déterminer les index par défaut pour les selectbox
-            default_date_idx = 0
-            default_target_idx = 1 if len(df.columns) > 1 else 0
+            # Aide à la sélection des colonnes
+            default_date_idx = next((i for i, col in enumerate(df.columns) if 'date' in col.lower() or 'time' in col.lower()), 0)
+            default_target_idx = next((i for i, col in enumerate(df.columns) if 'conso' in col.lower() or 'usage' in col.lower() or 'value' in col.lower()), 1 if len(df.columns) > 1 else 0)
             
-            # Essayer de trouver des noms de colonnes pertinents
-            for i, col in enumerate(df.columns):
-                if 'date' in col.lower() or 'time' in col.lower():
-                    default_date_idx = i
-                if 'conso' in col.lower() or 'usage' in col.lower() or 'energy' in col.lower():
-                    default_target_idx = i
-            
-            date_col = st.selectbox("Colonne Date/Index (Heure/Timestamp)", options=df.columns, index=default_date_idx)
-            target_col = st.selectbox("Colonne Valeur Cible (Consommation)", options=df.columns, index=default_target_idx)
+            date_col = st.selectbox("Colonne Date/Index", options=df.columns, index=default_date_idx)
+            target_col = st.selectbox("Colonne Valeur Cible (Consommation/Ventes)", options=df.columns, index=default_target_idx)
             
             if date_col == target_col:
                 st.warning("La colonne date et la colonne cible ne peuvent être identiques.")
             else:
-                st.subheader("Paramètres de Modélisation")
+                st.subheader("Agrégation et Paramètres")
+                
+                # AGRÉGATION / RESAMPLING pour gérer les duplicata
+                resample_freq = st.selectbox(
+                    "Fréquence d'agrégation (Resample)",
+                    options=['T', 'H', 'D', 'W', 'M'],
+                    index=1, # 'H' pour horaire
+                    help="T=Minute, H=Heure, D=Jour, W=Semaine, M=Mois. Choisir H si les données sont sub-horaires (votre cas)."
+                )
+                
+                resample_method = st.selectbox(
+                    "Méthode d'Agrégation",
+                    options=['sum', 'mean'],
+                    index=1, # Moyenne
+                    help="Opération pour agréger les enregistrements multiples au même moment."
+                )
                 
                 # Période Saisonnière (P)
+                # La période doit correspondre à la fréquence agrégée
+                if resample_freq == 'H':
+                    default_period = 24 # Saisonnalité journalière
+                elif resample_freq == 'D':
+                    default_period = 7 # Saisonnalité hebdomadaire
+                else:
+                    default_period = 1
+                
                 period_saisonniere = st.number_input(
                     "Période Saisonnière (P)", 
-                    value=24, # Hypothèse horaire
+                    value=default_period, 
                     min_value=1, 
-                    help="Si la fréquence est horaire, utilisez 24 (journalier). Si journalière, utilisez 7 (hebdomadaire)."
+                    help=f"Nombre de périodes dans un cycle. Ex: {default_period} si la fréquence est {resample_freq}."
                 )
                 
                 # Proportion Train/Test
@@ -118,7 +147,7 @@ with st.sidebar:
                 # Horizon de Prévision (H)
                 horizon_prevision = st.number_input(
                     "Horizon de Prévision (H)", 
-                    value=period_saisonniere * 2, # Prévoir sur 2 cycles
+                    value=period_saisonniere * 2,
                     min_value=1
                 )
                 
@@ -133,36 +162,41 @@ with st.sidebar:
 
 if run_analysis and df is not None and date_col is not None and target_col is not None and date_col != target_col:
     
-    with st.spinner("Analyse en cours... Veuillez patienter, cela peut prendre du temps avec un grand jeu de données."):
+    with st.spinner("Analyse en cours... (Cela peut prendre du temps sur 90 000 enregistrements)"):
         
         # --- PHASE 1: PRÉTRAITEMENT ---
         
         try:
-            # Conversion, Nettoyage et Indexation
+            # 1. Conversion et Indexation initiale
             append_to_log(f"Phase 1: Importation et Prétraitement de {target_col}")
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df.dropna(subset=[date_col], inplace=True)
-            df_ts = df.set_index(date_col)[target_col].astype(float)
-            df_ts = df_ts.sort_index()
             
-            # Inférence de la fréquence et remplissage des trous
-            inferred_freq = pd.infer_freq(df_ts.index)
-            if inferred_freq:
-                df_ts = df_ts.asfreq(inferred_freq)
-                append_to_log(f"  -> Fréquence temporelle inférée: {inferred_freq}")
-            else:
-                append_to_log("  -> AVERTISSEMENT: Fréquence temporelle non inférée. Lissage moins précis.")
-
-            # Traitement des Manquantes
-            initial_n = len(df_ts)
+            df_ts_initial = df.set_index(date_col)[target_col].astype(float)
+            df_ts_initial = df_ts_initial.sort_index()
+            initial_n = len(df_ts_initial)
+            
+            # 2. AGRÉGATION / RESAMPLING pour gérer les duplicata
+            append_to_log(f"  -> Agrégation à la fréquence {resample_freq} par {resample_method}...")
+            
+            if resample_method == 'sum':
+                df_ts = df_ts_initial.resample(resample_freq).sum()
+            else: # 'mean'
+                df_ts = df_ts_initial.resample(resample_freq).mean()
+            
+            # 3. Traitement des Manquantes (interpolation linéaire)
             missing_n = df_ts.isnull().sum()
             df_ts.interpolate(method='linear', inplace=True)
-            append_to_log(f"  -> {initial_n} observations. {missing_n} valeurs manquantes interpolées.")
-            st.success(f"Données chargées : {initial_n} observations de {df_ts.index.min()} à {df_ts.index.max()}")
+            
+            final_n = len(df_ts)
+            
+            append_to_log(f"  -> {initial_n} obs. initiales agrégées en {final_n} obs. {resample_freq}.")
+            append_to_log(f"  -> {missing_n} périodes manquantes (vides) interpolées.")
+            st.success(f"Données chargées et agrégées : {final_n} observations de {df_ts.index.min()} à {df_ts.index.max()} (Fréquence : {resample_freq})")
             
         except Exception as e:
-            st.error(f"Erreur lors du Prétraitement de la série : {e}. Vérifiez le format de vos colonnes.")
-            append_to_log(f"  -> ERREUR DE PRÉTRAITEMENT: {e}")
+            st.error(f"Erreur critique dans le Prétraitement : {e}. Le Resampling a échoué.")
+            append_to_log(f"  -> ERREUR CRITIQUE DANS LE PRÉTRAITEMENT: {e}")
             st.stop()
         
         # Découpage Train/Test
@@ -183,21 +217,21 @@ if run_analysis and df is not None and date_col is not None and target_col is no
         with col1:
             fig, ax = plt.subplots(figsize=(10, 4))
             df_ts.plot(ax=ax, label="Série Complète")
-            ax.set_title(f"Série Temporelle : {target_col}")
+            ax.set_title(f"Série Temporelle Agrégée : {target_col}")
             st.pyplot(fig)
             
-        # B. Décomposition
+        # B. Décomposition Saisonière
         with col2:
             try:
-                # La décomposition peut être très lente sur 90k lignes, réduire la taille ou utiliser seulement le train set
-                decomp_data = df_ts.tail(2 * period_saisonniere).copy() # Décomposer seulement les 2 dernières saisons
+                # Réduire les données pour la décomposition si elles sont trop nombreuses (> 2000)
+                decomp_data = df_ts.tail(period_saisonniere * 2 if len(df_ts) > period_saisonniere * 2 else len(df_ts)).copy()
                 decomposition = seasonal_decompose(decomp_data, model='additive', period=period_saisonniere, extrapolate_trend='freq')
-                fig_decomp = decomposition.plot()
+                fig_decomp = decomposition.plot() 
                 fig_decomp.set_size_inches(10, 8)
                 st.pyplot(fig_decomp)
                 st.caption(f"Décomposition affichée sur les {len(decomp_data)} dernières observations.")
             except Exception as e:
-                st.warning(f"Impossible de décomposer (période saisonnière/données insuffisantes) : {e}")
+                st.warning(f"Impossible de décomposer (période/données insuffisantes) : {e}")
                 append_to_log(f"  -> AVERTISSEMENT: Échec de la décomposition: {e}")
 
         # C. Tests de Stationnarité
@@ -205,12 +239,12 @@ if run_analysis and df is not None and date_col is not None and target_col is no
         try:
             adf_result = adfuller(df_ts.dropna())
             kpss_result = kpss(df_ts.dropna())
-            st.write(f"Test ADF (p-value): **{adf_result[1]:.4f}** (Hypothèse nulle: non stationnaire)")
-            st.write(f"Test KPSS (p-value): **{kpss_result[1]:.4f}** (Hypothèse nulle: stationnaire)")
+            st.write(f"Test ADF (p-value): **{adf_result[1]:.4f}** (H0: non stationnaire)")
+            st.write(f"Test KPSS (p-value): **{kpss_result[1]:.4f}** (H0: stationnaire)")
             append_to_log(f"  -> ADF p-value: {adf_result[1]:.4f} | KPSS p-value: {kpss_result[1]:.4f}")
         except Exception as e:
             st.warning(f"Tests ADF/KPSS impossible : {e}")
-            append_to_log(f"  -> ERREUR: Tests de stationnarité impossible: {e}")
+
 
         # --- PHASE 3: MODÉLISATION ET ÉVALUATION ---
         
@@ -223,7 +257,6 @@ if run_analysis and df is not None and date_col is not None and target_col is no
         model_configs = {
             'SES': SimpleExpSmoothing(train, initialization_method="estimated"),
             'Holt': Holt(train, initialization_method="estimated"),
-            # Les modèles Holt-Winters sont critiques pour l'électricité
             'HW Additif': ExponentialSmoothing(train, seasonal_periods=period_saisonniere, trend='add', seasonal='add', initialization_method="estimated"),
             'HW Multiplicatif': ExponentialSmoothing(train, seasonal_periods=period_saisonniere, trend='add', seasonal='mul', initialization_method="estimated"),
         }
@@ -232,7 +265,7 @@ if run_analysis and df is not None and date_col is not None and target_col is no
         
         for i, (name, model_def) in enumerate(model_configs.items()):
             try:
-                # Ajustement et Optimisation
+                # Ajustement et Optimisation (Minimisation du MSE)
                 fitted_model = model_def.fit(disp=False)
                 models[name] = fitted_model
                 
@@ -250,8 +283,8 @@ if run_analysis and df is not None and date_col is not None and target_col is no
                     'Modèle': name,
                     'AIC': fitted_model.aic,
                     'BIC': fitted_model.bic,
-                    'Paramètres (α)': params.get('smoothing_level', np.nan),
-                    'Paramètres (γ)': params.get('smoothing_seasonal', np.nan),
+                    'Paramètres (α)': f"{params.get('smoothing_level', np.nan):.4f}",
+                    'Paramètres (γ)': f"{params.get('smoothing_seasonal', np.nan):.4f}",
                     **metrics
                 }
                 results_list.append(result)
@@ -267,9 +300,11 @@ if run_analysis and df is not None and date_col is not None and target_col is no
         # Affichage du Tableau Comparatif
         if results_list:
             results_df = pd.DataFrame(results_list)
+            # Gestion des colonnes de p-value qui pourraient ne pas être numériques
+            numeric_cols = ['MSE', 'MAE', 'RMSE', 'AIC', 'BIC']
             results_df = results_df.sort_values(by='MSE')
             st.subheader("Tableau Comparatif et Sélection Automatique")
-            st.dataframe(results_df.style.highlight_min(subset=['MSE', 'MAE', 'RMSE', 'AIC', 'BIC'], axis=0, color='lightgreen'))
+            st.dataframe(results_df.style.highlight_min(subset=numeric_cols, axis=0, color='lightgreen'))
             append_to_log("  -> Tableau comparatif généré et classé par MSE.")
             
             # Sélection du meilleur modèle
@@ -288,7 +323,7 @@ if run_analysis and df is not None and date_col is not None and target_col is no
                 start=len(df_ts), 
                 end=len(df_ts) + horizon_prevision - 1, 
                 return_conf_int=True, 
-                alpha=0.05 # Intervalle de confiance à 95%
+                alpha=0.05
             )
             forecast_values = pd.Series(forecast_result[0], name='Prévision')
             conf_int = pd.DataFrame(forecast_result[1], columns=['Borne_Inf', 'Borne_Sup'])
@@ -299,17 +334,13 @@ if run_analysis and df is not None and date_col is not None and target_col is no
             
             forecast_df = pd.concat([forecast_values, conf_int], axis=1).set_index(future_index)
             
-            # A. Visualisation 
+            # A. Visualisation
             fig, ax = plt.subplots(figsize=(12, 6))
             df_ts.plot(ax=ax, label='Historique (Train)', color='blue')
-            # Afficher la zone de test
             test.plot(ax=ax, label='Données de Test', color='orange')
-            
-            # Prévision Future
             forecast_df['Prévision'].plot(ax=ax, label='Prévision Future', color='red', linestyle='--')
             
-            # Intervalle de confiance
-            ax.fill_between(forecast_df.index, forecast_df['Borne_Inf'], forecast_df['Borne_Sup'], alpha=0.1, color='red', label='Intervalle de Confiance 95%')
+            ax.fill_between(forecast_df.index, forecast_df['Borne_Inf'], forecast_df['Borne_Sup'], alpha=0.1, color='red', label='Intervalle de Confiance 95%') 
             
             ax.legend()
             ax.set_title(f"Prévisions avec Intervalle de Confiance (Modèle: {best_model_name})")
@@ -359,4 +390,4 @@ if run_analysis and df is not None and date_col is not None and target_col is no
 # --- INSTRUCTIONS D'EXÉCUTION ---
 if uploaded_file is None:
     st.info("⬆️ Veuillez téléverser votre fichier de données via la barre latérale pour commencer.")
-    st.caption("Une fois le fichier chargé, sélectionnez la colonne de date/heure et la colonne de consommation (cible).")
+    st.caption("Une fois le fichier chargé, sélectionnez la colonne de date/heure et la colonne cible, puis ajustez la Fréquence d'agrégation (H, D, etc.) pour gérer les doublons.")
