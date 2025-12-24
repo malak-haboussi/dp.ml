@@ -42,7 +42,6 @@ def safe_serialize(obj):
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2103/2103633.png", width=80)
     st.title("⚙️ Paramètres")
-    st.markdown("**Master ROMARIN 2025**")
     st.divider()
     
     method_name = st.selectbox(
@@ -56,7 +55,7 @@ with st.sidebar:
     run_btn = st.button("🚀 Lancer l'Audit Complet", use_container_width=True)
 
 # --- CORPS PRINCIPAL ---
-st.title("📊 Système Expert de Prévision Temporelle")
+st.title("📊 APPLICATION DE PREVISION ")
 st.markdown("Ce système génère un journal d'audit complet conforme aux exigences du projet.")
 
 if run_btn:
