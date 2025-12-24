@@ -154,4 +154,4 @@ if run_btn:
         st.info("Astuce : Si vous utilisez Holt-Winters, assurez-vous que les données n'ont pas de valeurs nulles ou négatives.")
 
 else:
-    st.info("👋 Bienvenue dans le système ROMARIN. Configurez vos paramètres à gauche et cliquez sur **Lancer l'Audit**.")
+    st.info("👋 Bienvenue dans notre application de prevision. Configurez vos paramètres à gauche et cliquez sur **Lancer l'Audit**.")
