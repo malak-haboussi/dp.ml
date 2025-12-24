@@ -3,7 +3,6 @@ pandas
 numpy
 seaborn
 matplotlib
-pulp
-scikit-learn
 statsmodels
+scikit-learn
 scipy
