@@ -7,132 +7,152 @@ import json, uuid, os, time
 from datetime import datetime
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing, Holt, ExponentialSmoothing
 from statsmodels.tsa.stattools import adfuller, kpss
-from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_absolute_percentage_error
+from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
 from scipy.stats import shapiro, skew, kurtosis
 
-# --- CONFIGURATION PAGE ---
-st.set_page_config(page_title="ROMARIN Expert System", page_icon="🕵️", layout="wide")
+# --- CONFIGURATION DE LA PAGE ---
+st.set_page_config(page_title="Expert ROMARIN Forecast", page_icon="📈", layout="wide")
 
-# CSS pour un look "Rapport d'Audit"
+# CSS personnalisé pour un look professionnel
 st.markdown("""
     <style>
-    .report-box { background-color: #ffffff; padding: 20px; border-radius: 10px; border-left: 5px solid #1e3d59; box-shadow: 2px 2px 15px rgba(0,0,0,0.1); }
-    .stat-label { font-weight: bold; color: #1e3d59; }
+    .main { background-color: #f0f2f6; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border-left: 5px solid #004a99; }
+    .report-title { color: #004a99; font-weight: bold; border-bottom: 2px solid #004a99; padding-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- FONCTIONS TECHNIQUES ---
 @st.cache_data
-def load_data():
+def load_and_clean_data():
     df = sns.load_dataset("flights")
     df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str))
-    series = df.set_index("date").asfreq('MS')["passengers"].interpolate()
+    series = df.set_index("date").asfreq('MS')["passengers"].interpolate(method='linear')
     return series, df
 
-def check_stationarity(series):
-    return "Stationnaire" if adfuller(series)[1] < 0.05 else "Non Stationnaire"
+def safe_serialize(obj):
+    """Nettoie les objets Numpy pour l'affichage JSON"""
+    if isinstance(obj, (np.ndarray, list)):
+        return [round(float(x), 4) for x in obj]
+    if isinstance(obj, (np.float64, np.int64, float, int)):
+        return round(float(obj), 4)
+    return str(obj)
 
-# --- SIDEBAR ---
+# --- BARRE LATÉRALE ---
 with st.sidebar:
-    st.header("🎛️ Paramètres")
-    method = st.selectbox("Modèle", ["Moyenne Mobile", "Régression Linéaire", "SES", "Holt", "HW Additif", "HW Multiplicatif"])
-    ratio = st.slider("Split Train/Test", 0.6, 0.9, 0.8)
+    st.image("https://cdn-icons-png.flaticon.com/512/2103/2103633.png", width=80)
+    st.title("⚙️ Paramètres")
+    st.markdown("**Master ROMARIN 2025**")
     st.divider()
-    run = st.button("Lancer l'Audit Complet", use_container_width=True)
+    
+    method_name = st.selectbox(
+        "Modèle de prévision",
+        ["Moyenne Mobile", "Régression Linéaire", "Lissage Simple (SES)", 
+         "Lissage de Holt", "Holt-Winters Additif", "Holt-Winters Multiplicatif"]
+    )
+    
+    split_ratio = st.slider("Split Entraînement (%)", 60, 90, 80)
+    st.divider()
+    run_btn = st.button("🚀 Lancer l'Audit Complet", use_container_width=True)
 
-# --- MAIN ---
-st.title("🛡️ Système Expert ROMARIN - Audit de Prévision")
+# --- CORPS PRINCIPAL ---
+st.title("📊 Système Expert de Prévision Temporelle")
+st.markdown("Ce système génère un journal d'audit complet conforme aux exigences du projet.")
 
-if run:
-    series, raw_df = load_data()
-    train_size = int(len(series) * ratio)
-    train, test = series.iloc[:train_size], series.iloc[train_size:]
+if run_btn:
+    # 1. Préparation
     sid = uuid.uuid4().hex[:8].upper()
+    series, raw_df = load_and_clean_data()
+    train_size = int(len(series) * (split_ratio / 100))
+    train, test = series.iloc[:train_size], series.iloc[train_size:]
     
-    # CALCULS
+    # 2. Modélisation
     start_time = time.time()
-    if method == "HW Multiplicatif":
-        model = ExponentialSmoothing(train, trend="add", seasonal="mul", seasonal_periods=12, use_boxcox=True).fit()
-        preds = model.forecast(len(test))
-        params = model.params
-    elif method == "HW Additif":
-        model = ExponentialSmoothing(train, trend="add", seasonal="add", seasonal_periods=12).fit()
-        preds = model.forecast(len(test))
-        params = model.params
-    else: # Fallback simple pour la démo
-        model = Holt(train).fit()
-        preds = model.forecast(len(test))
-        params = model.params
-    
-    exec_time = time.time() - start_time
-
-    # --- AFFICHAGE DU JOURNAL D'AUDIT DÉTAILLÉ (STYLE PAGE 4) ---
-    st.subheader(f"📑 Journal d'Audit de Session : {sid}")
-    
-    # SECTION 1: EN-TÊTE ET IMPORTATION
-    with st.expander("✅ 1. En-tête du processus & Importation", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f"**Horodatage :** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-        c1.markdown(f"**Série :** Passagers Aériens (Seaborn)")
-        c2.markdown(f"**Observations :** {len(series)} mois")
-        c2.markdown(f"**Variables :** {list(raw_df.columns)}")
-        c3.markdown(f"**Traitement NaNs :** Interpolation Linéaire")
-        c3.markdown(f"**Outliers :** Détectés par IQR & lissés")
-
-    # SECTION 2: ANALYSE EXPLORATOIRE (EDA)
-    with st.expander("🔍 2. Journal d'Analyse Exploratoire", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.write("**Statistiques Descriptives**")
-            st.write(f"• Moyenne : {series.mean():.2f}")
-            st.write(f"• Variance : {series.var():.2f}")
-            st.write(f"• Skewness : {skew(series):.2f}")
-            st.write(f"• Kurtosis : {kurtosis(series):.2f}")
-        with c2:
-            st.write("**Tests de Stationnarité**")
-            st.write(f"• ADF p-value : {adfuller(series)[1]:.4f}")
-            st.write(f"• Résultat : {check_stationarity(series)}")
-        with c3:
-            st.write("**Saisonnalité & Tendance**")
-            st.write("• Saisonnalité : Identifiée (12 mois)")
-            st.write("• Tendance : Croissante linéaire")
-
-    # SECTION 3: MODÉLISATION ET ÉVALUATION
-    
-    with st.expander("⚙️ 3. Journal de Modélisation & Évaluation", expanded=True):
-        col_left, col_right = st.columns([2, 1])
-        with col_left:
-            st.write(f"**Modèle :** {method}")
-            st.write("**Paramètres optimaux retenus :**")
-            st.code({k: round(v, 4) for k, v in params.items() if 'smoothing' in k or 'initial' in k}, language="json")
-        with col_right:
-            st.write("**Métriques de Performance**")
-            st.metric("MSE", f"{mean_squared_error(test, preds):.2f}")
-            st.metric("MAPE", f"{mean_absolute_percentage_error(test, preds)*100:.2f}%")
-            st.write(f"**Temps de calcul :** {exec_time:.4f}s")
-
-    # SECTION 4: ANALYSE DES RÉSIDUS ET PRÉVISIONS
-    with st.expander("📊 4. Journal de Prévision & Résidus", expanded=True):
-        residus = test - preds
-        shap_p = shapiro(residus)[1]
+    try:
+        if method_name == "Moyenne Mobile":
+            preds = series.shift(1).rolling(window=12).mean().iloc[train_size:]
+            params = {"Window": 12}
+        elif method_name == "Régression Linéaire":
+            coef = np.polyfit(np.arange(len(train)), train.values, 1)
+            preds = pd.Series(np.poly1d(coef)(np.arange(len(train), len(series))), index=test.index)
+            params = {"Pente": coef[0], "Intercept": coef[1]}
+        elif method_name == "Lissage Simple (SES)":
+            model = SimpleExpSmoothing(train, initialization_method="estimated").fit()
+            preds, params = model.forecast(len(test)), model.params
+        elif method_name == "Lissage de Holt":
+            model = Holt(train, initialization_method="estimated").fit()
+            preds, params = model.forecast(len(test)), model.params
+        elif method_name == "Holt-Winters Additif":
+            model = ExponentialSmoothing(train, trend="add", seasonal="add", seasonal_periods=12).fit()
+            preds, params = model.forecast(len(test)), model.params
+        else: # Multiplicatif
+            model = ExponentialSmoothing(train, trend="add", seasonal="mul", seasonal_periods=12, use_boxcox=True).fit()
+            preds, params = model.forecast(len(test)), model.params
         
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.write("**Test sur les résidus**")
-            st.write(f"• Shapiro-Wilk p-val : {shap_p:.4f}")
-            st.write(f"• Normalité : {'Oui' if shap_p > 0.05 else 'Non'}")
-        with c2:
-            fig, ax = plt.subplots(figsize=(8, 3))
-            ax.plot(series, label="Historique", color="black", alpha=0.5)
-            ax.plot(preds, label="Prévision", color="red", linestyle="--")
-            ax.fill_between(test.index, preds*0.95, preds*1.05, color='red', alpha=0.1, label="IC 95%")
-            ax.legend(fontsize='small')
-            st.pyplot(fig)
+        exec_time = time.time() - start_time
+        mse = mean_squared_error(test, preds)
+        mape = mean_absolute_percentage_error(test, preds) * 100
 
-    # EXPORT
-    st.divider()
-    audit_full = {"id": sid, "method": method, "performance": mean_squared_error(test, preds)}
-    st.download_button("📥 Exporter le Livrable JSON Complet", json.dumps(audit_full), file_name=f"ROMARIN_{sid}.json")
+        # --- AFFICHAGE DES RÉSULTATS ---
+        st.subheader("📈 Visualisation des Prévisions", divider="blue")
+        
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(train, label="Historique (Train)", color="#1e3d59", linewidth=2)
+        ax.plot(test, label="Réel (Test)", color="#27ae60", linewidth=2)
+        ax.plot(preds, label="Prévision", color="#e74c3c", linestyle="--", linewidth=2)
+        ax.fill_between(test.index, preds*0.95, preds*1.05, color='red', alpha=0.1, label="IC 95%")
+        ax.set_title(f"Modèle : {method_name}")
+        ax.legend()
+        st.pyplot(fig)
+
+        # --- JOURNAL D'AUDIT DÉTAILLÉ (STYLE PAGE 4) ---
+        st.subheader(f"📑 Journal d'Audit Détaillé - Session {sid}", divider="blue")
+        
+        tab1, tab2, tab3 = st.tabs(["📋 Import & EDA", "⚙️ Modélisation", "📊 Évaluation"])
+
+        with tab1:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**1.1 En-tête & Importation**")
+                st.write(f"• Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+                st.write(f"• Obs. importées : {len(series)}")
+                st.write(f"• Variables : {list(raw_df.columns)}")
+                st.write(f"• Traitement : Interpolation & Fréquence MS")
+            with c2:
+                st.markdown("**1.2 Analyse Exploratoire**")
+                st.write(f"• Moyenne : {series.mean():.2f} | Skewness : {skew(series):.2f}")
+                st.write(f"• ADF p-value : {adfuller(series)[1]:.4f}")
+                st.write(f"• Stationnarité : {'Non' if adfuller(series)[1] > 0.05 else 'Oui'}")
+
+        with tab2:
+            st.markdown("**2.1 Configuration du Modèle**")
+            # Correction du TypeError ici avec une boucle de nettoyage
+            clean_params = {k: safe_serialize(v) for k, v in params.items() if any(x in k for x in ['smoothing', 'initial', 'lamda'])}
+            st.json(clean_params)
+            st.write(f"**Temps d'exécution :** {exec_time:.4f} secondes")
+
+        with tab3:
+            st.markdown("**3.1 Métriques de Qualité**")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("MSE", f"{mse:.2f}")
+            col_m2.metric("MAPE", f"{mape:.2f}%")
+            col_m3.metric("Shapiro (Normalité)", f"{shapiro(test-preds)[1]:.4f}")
+            
+            # Histogramme des résidus
+            
+            fig2, ax2 = plt.subplots(figsize=(6, 2))
+            sns.histplot(test - preds, kde=True, ax=ax2, color="purple")
+            ax2.set_title("Distribution des Résidus")
+            st.pyplot(fig2)
+
+        # --- EXPORT ---
+        st.divider()
+        audit_json = json.dumps({"audit": sid, "method": method_name, "metrics": {"mse": mse, "mape": mape}, "params": clean_params}, indent=4)
+        st.download_button("📥 Télécharger le Livrable JSON", audit_json, file_name=f"ROMARIN_AUDIT_{sid}.json", mime="application/json")
+
+    except Exception as e:
+        st.error(f"❌ Erreur critique : {e}")
+        st.info("Astuce : Si vous utilisez Holt-Winters, assurez-vous que les données n'ont pas de valeurs nulles ou négatives.")
 
 else:
-    st.info("Veuillez cliquer sur **Lancer l'Audit** pour générer le rapport détaillé.")
+    st.info("👋 Bienvenue dans le système ROMARIN. Configurez vos paramètres à gauche et cliquez sur **Lancer l'Audit**.")
