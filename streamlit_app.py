@@ -266,17 +266,6 @@ def load_data():
         '584J250270': 8802, '588W662525': 0,    '584W010713': 0
     }
 
-    categories = {
-        '538Y042219': 'Vanne',    '586L015592': 'Joint',    '584C110991': 'Filtre',
-        '538Y041201': 'Pompe',    '584W011710': 'Vanne',    '584C110457': 'Joint',
-        '584C113270': 'Filtre',   '584W010711': 'Vanne',    '538Y042606': 'Pompe',
-        '538Y030905': 'Compresseur','584C030965':'Filtre',  '536Y200600': 'Joint',
-        '584C030232': 'Compresseur','538Y042632':'Vanne',   '588W662595': 'Vanne',
-        '538Y042626': 'Joint',    '584J250350': 'Pompe',    '584C110023': 'Filtre',
-        '586M038493': 'Joint',    '586L015590': 'Joint',    '584J250270': 'Pompe',
-        '588W662525': 'Compresseur','584W010713':'Vanne'
-    }
-
     conso_moy = 40
     lignes = []
     for item, stock in stocks_reels.items():
@@ -299,7 +288,6 @@ def load_data():
 
         lignes.append({
             'Code Article':       item,
-            'Catégorie':          categories.get(item, 'Autre'),
             'Stock Actuel':       stock,
             'Besoin 30j':         besoin_30j,
             'Jours Restants':     jours_restants,
@@ -331,12 +319,6 @@ with st.sidebar:
         default=["RUPTURE", "CRITIQUE", "ATTENTION", "OK"]
     )
 
-    filtre_cat = st.multiselect(
-        "Catégorie",
-        options=sorted(df['Catégorie'].unique()),
-        default=sorted(df['Catégorie'].unique())
-    )
-
     seuil_jours = st.slider("Horizon d'alerte (jours)", 1, 90, 30)
 
     st.markdown("---")
@@ -350,10 +332,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # ─── Filtrage ────────────────────────────────────────────────────────────────
-df_f = df[
-    df['Statut'].isin(filtre_statut) &
-    df['Catégorie'].isin(filtre_cat)
-]
+df_f = df[df['Statut'].isin(filtre_statut)]
 
 # ─── Bannière ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -576,40 +555,6 @@ with col_right:
     st.pyplot(fig2, use_container_width=True)
     plt.close()
 
-    # Barres par catégorie
-    st.markdown("""
-    <div class="section-header" style="margin-top:1rem">
-        <span class="section-dot"></span> Stock par Catégorie
-    </div>
-    """, unsafe_allow_html=True)
-
-    cat_stock = df.groupby('Catégorie')['Stock Actuel'].sum().sort_values(ascending=True)
-    fig3, ax3 = plt.subplots(figsize=(5, 3))
-    fig3.patch.set_facecolor('#161B22')
-    ax3.set_facecolor('#161B22')
-
-    bars = ax3.barh(
-        cat_stock.index, cat_stock.values,
-        color=['#F0A500' if v == cat_stock.max() else '#2A3340' for v in cat_stock.values],
-        edgecolor='none', height=0.6
-    )
-
-    for bar, val in zip(bars, cat_stock.values):
-        ax3.text(val + cat_stock.max() * 0.01, bar.get_y() + bar.get_height() / 2,
-                 f'{val:,.0f}', va='center', ha='left', fontsize=8,
-                 color='#7A8599', fontfamily='monospace')
-
-    ax3.set_facecolor('#161B22')
-    ax3.tick_params(colors='#7A8599', labelsize=8)
-    for sp in ax3.spines.values(): sp.set_visible(False)
-    ax3.set_xlabel("Unités en stock", color='#7A8599', fontsize=8)
-    ax3.xaxis.label.set_color('#7A8599')
-    ax3.tick_params(axis='x', colors='#7A8599')
-    ax3.tick_params(axis='y', colors='#E8EAF0')
-
-    plt.tight_layout(pad=0.5)
-    st.pyplot(fig3, use_container_width=True)
-    plt.close()
 
 # ─── Tableau détaillé ─────────────────────────────────────────────────────────
 st.markdown("""
@@ -627,28 +572,22 @@ df_display = df_f.copy()
 df_display['Statut Affiché'] = df_display['Statut'].map(format_statut)
 df_display['Couverture'] = df_display['Couverture (%)'].apply(lambda x: f"{x}%")
 
-# Style conditionnel
-def style_table(df_in):
-    styles = pd.DataFrame('', index=df_in.index, columns=df_in.columns)
-    for i, row in df_in.iterrows():
-        if row['Statut'] == 'RUPTURE':
-            styles.loc[i, 'Stock Actuel'] = 'color: #FF6B75; font-weight: 600'
-            styles.loc[i, 'Statut Affiché'] = 'color: #FF6B75; font-weight: 600'
-        elif row['Statut'] == 'CRITIQUE':
-            styles.loc[i, 'Stock Actuel'] = 'color: #F4722B; font-weight: 600'
-            styles.loc[i, 'Statut Affiché'] = 'color: #F4722B; font-weight: 600'
-        elif row['Statut'] == 'ATTENTION':
-            styles.loc[i, 'Stock Actuel'] = 'color: #F0A500; font-weight: 600'
-            styles.loc[i, 'Statut Affiché'] = 'color: #F0A500; font-weight: 600'
-        else:
-            styles.loc[i, 'Statut Affiché'] = 'color: #2DC653; font-weight: 600'
-    return styles
-
-cols_show = ['Code Article', 'Catégorie', 'Stock Actuel', 'Besoin 30j', 'Jours Restants', 'Couverture', 'Statut Affiché']
+cols_show = ['Code Article', 'Stock Actuel', 'Besoin 30j', 'Jours Restants', 'Couverture', 'Statut Affiché']
 df_show = df_display[cols_show].rename(columns={'Statut Affiché': 'Statut'})
 
+def color_row(row):
+    stat = df_display.loc[row.name, 'Statut']
+    if stat == 'RUPTURE':
+        return ['color: #FF6B75; font-weight:600' if c in ['Stock Actuel','Statut Affiché'] else '' for c in cols_show]
+    elif stat == 'CRITIQUE':
+        return ['color: #F4722B; font-weight:600' if c in ['Stock Actuel','Statut Affiché'] else '' for c in cols_show]
+    elif stat == 'ATTENTION':
+        return ['color: #F0A500; font-weight:600' if c in ['Stock Actuel','Statut Affiché'] else '' for c in cols_show]
+    else:
+        return ['color: #2DC653; font-weight:600' if c == 'Statut Affiché' else '' for c in cols_show]
+
 st.dataframe(
-    df_show.style.apply(lambda _: style_table(df_display)[['Code Article','Catégorie','Stock Actuel','Besoin 30j','Jours Restants','Couverture (%)','Statut']].rename(columns={'Statut':'Statut Affiché'}).values, axis=None),
+    df_show.style.apply(color_row, axis=1),
     use_container_width=True,
     height=420
 )
