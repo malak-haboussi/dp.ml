@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -430,72 +429,104 @@ with col_left:
     </div>
     """, unsafe_allow_html=True)
 
-    # Couleur de ligne selon statut
-    row_colors = []
-    for _, r in df_f.iterrows():
-        if r['Statut'] == 'RUPTURE':  row_colors.append('#E63946')
-        elif r['Statut'] == 'CRITIQUE': row_colors.append('#F4722B')
-        elif r['Statut'] == 'ATTENTION': row_colors.append('#F0A500')
-        else: row_colors.append('#2DC653')
+    # ── Graphique Gantt de disponibilité ──────────────────────────────────────
+    # Trier par jours restants (critiques en haut)
+    df_gantt = df_f.sort_values('Jours Restants', ascending=True).reset_index(drop=True)
+    n_items = len(df_gantt)
+    HORIZON = 30
+    BAR_H   = 0.62
+    PAD     = 0.19
 
-    matrice = []
-    for _, row in df_f.iterrows():
-        j = int(row['Jours Restants'])
-        if j == 0 and row['Stock Actuel'] == 0:
-            matrice.append([0] * 30)
-        elif j > 30:
-            matrice.append([1] * 30)
-        else:
-            matrice.append([1] * j + [0] * (30 - j))
-
-    fig, ax = plt.subplots(figsize=(11, max(4, len(df_f) * 0.38)))
+    fig, ax = plt.subplots(figsize=(11, max(5, n_items * 0.52 + 1.2)))
     fig.patch.set_facecolor('#161B22')
     ax.set_facecolor('#161B22')
 
-    # Heatmap avec palette personnalisée
-    from matplotlib.colors import LinearSegmentedColormap
-    cmap_custom = LinearSegmentedColormap.from_list(
-        'sonatrach', ['#3D0B0E', '#E63946', '#F0A500', '#2DC653'], N=256
-    )
-    # Heatmap binaire rouge/vert
-    cmap_bin = LinearSegmentedColormap.from_list('bin', ['#3D0B0E', '#1A3A1F'], N=2)
+    # Couleurs par statut
+    color_map = {
+        'RUPTURE':  ('#E63946', '#FF6B75', '#3D0B0E'),   # vif, label, fond rupture
+        'CRITIQUE': ('#F4722B', '#FF9A6C', '#3D1B0B'),
+        'ATTENTION':('#F0A500', '#FFD166', '#3D2C00'),
+        'OK':       ('#2DC653', '#5EE87F', '#0A2E14'),
+    }
 
-    sns.heatmap(
-        matrice,
-        cmap=['#4A1018', '#1E3A24'],
-        cbar=False,
-        yticklabels=df_f['Code Article'].values,
-        xticklabels=[str(i) if i % 5 == 0 else '' for i in range(1, 31)],
-        ax=ax,
-        linewidths=0.3,
-        linecolor='#0D1117'
-    )
+    for i, row in df_gantt.iterrows():
+        j     = min(int(row['Jours Restants']), HORIZON)
+        stat  = row['Statut']
+        code  = row['Code Article']
+        clr_vif, clr_lbl, clr_bg = color_map[stat]
 
-    # Colorier les labels Y selon statut
-    ytick_labels = ax.get_yticklabels()
-    for label, color in zip(ytick_labels, row_colors):
-        label.set_color(color)
-        label.set_fontsize(8.5)
-        label.set_fontfamily('monospace')
+        y = i * (BAR_H + PAD)
 
-    ax.set_xticklabels(ax.get_xticklabels(), color='#7A8599', fontsize=8)
-    ax.tick_params(axis='both', which='both', length=0, pad=6)
-    ax.set_xlabel("Jours futurs", color='#7A8599', fontsize=9, labelpad=8)
-    ax.set_ylabel("")
+        # Fond grisé total (zone 30j)
+        ax.barh(y, HORIZON, height=BAR_H, left=0,
+                color='#1E2530', edgecolor='none', zorder=1)
 
-    # Légende
-    leg_patches = [
-        mpatches.Patch(color='#1E3A24', label='Stock disponible'),
-        mpatches.Patch(color='#4A1018', label='Rupture prévue'),
-    ]
-    ax.legend(handles=leg_patches, loc='lower right', fontsize=8,
-              facecolor='#1C2330', edgecolor='#2A3340',
-              labelcolor='#E8EAF0', framealpha=0.9)
+        # Barre "stock disponible"
+        if j > 0:
+            ax.barh(y, j, height=BAR_H, left=0,
+                    color=clr_vif, edgecolor='none',
+                    alpha=0.88, zorder=2)
+
+        # Barre "rupture prévue" (zone après j)
+        if j < HORIZON:
+            ax.barh(y, HORIZON - j, height=BAR_H, left=j,
+                    color='#E63946', edgecolor='none',
+                    alpha=0.18, zorder=2)
+
+        # Ligne de rupture verticale
+        if 0 < j < HORIZON:
+            ax.axvline(x=j, ymin=(y - BAR_H/2) / (n_items * (BAR_H + PAD)),
+                       ymax=(y + BAR_H/2) / (n_items * (BAR_H + PAD)),
+                       color=clr_vif, linewidth=1.2, alpha=0.7, zorder=3)
+
+        # Label jours restants dans la barre
+        label_x = j / 2 if j >= 3 else j + 0.5
+        label_txt = f"J+{j}" if j > 0 else "Rupture"
+        label_col = '#0D1117' if j >= 4 else clr_vif
+        ax.text(label_x, y, label_txt,
+                ha='center', va='center',
+                fontsize=7.5, fontweight='bold',
+                color=label_col, zorder=4,
+                fontfamily='monospace')
+
+        # Label code article (à gauche)
+        ax.text(-0.4, y, code,
+                ha='right', va='center',
+                fontsize=8.2, color=clr_lbl,
+                fontfamily='monospace', zorder=4)
+
+    # Ligne verticale "Aujourd'hui"
+    ax.axvline(x=0, color='#F0A500', linewidth=1.5, linestyle='--', alpha=0.5, zorder=5)
+
+    # Grille verticale légère aux jalons
+    for x_mark in [7, 14, 21, 30]:
+        ax.axvline(x=x_mark, color='#2A3340', linewidth=0.8, linestyle='-', zorder=0)
+        ax.text(x_mark, -0.5, f"J{x_mark}",
+                ha='center', va='top', fontsize=7.5, color='#7A8599')
+
+    # Axes
+    ax.set_xlim(-0.5, HORIZON + 0.2)
+    ax.set_ylim(-0.8, n_items * (BAR_H + PAD))
+    ax.set_yticks([])
+    ax.set_xticks([])
+    ax.set_xlabel("")
 
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    plt.tight_layout(pad=0.5)
+    # Légende
+    leg_items = [
+        mpatches.Patch(color='#2DC653', alpha=0.88, label='OK  — stock suffisant'),
+        mpatches.Patch(color='#F0A500', alpha=0.88, label='Attention  — ≤ 30j'),
+        mpatches.Patch(color='#F4722B', alpha=0.88, label='Critique  — ≤ 7j'),
+        mpatches.Patch(color='#E63946', alpha=0.88, label='Rupture  — stock nul'),
+    ]
+    ax.legend(handles=leg_items, loc='lower right', fontsize=8,
+              facecolor='#1C2330', edgecolor='#2A3340',
+              labelcolor='#E8EAF0', framealpha=0.95,
+              handlelength=1.2, handleheight=0.9)
+
+    plt.tight_layout(pad=0.4)
     st.pyplot(fig, use_container_width=True)
     plt.close()
 
