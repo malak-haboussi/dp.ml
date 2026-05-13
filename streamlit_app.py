@@ -254,48 +254,81 @@ html, body, [class*="css"]  {
 """, unsafe_allow_html=True)
 
 
-# ─── Données ──────────────────────────────────────────────────────────────────
+# ─── Données LSTM réelles ─────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    stocks_reels = {
-        '538Y042219': 11707, '586L015592': 1007, '584C110991': 376, '538Y041201': 1359,
-        '584W011710': 0,    '584C110457': 1339, '584C113270': 0,    '584W010711': 0,
-        '538Y042606': 1154, '538Y030905': 526,  '584C030965': 0,    '536Y200600': 0,
-        '584C030232': 108,  '538Y042632': 628,  '588W662595': 23405,'538Y042626': 43,
-        '584J250350': 4834, '584C110023': 457,  '586M038493': 225,  '586L015590': 0,
-        '584J250270': 8802, '588W662525': 0,    '584W010713': 0
-    }
+    # Données issues du modèle LSTM — valeurs exactes
+    raw = [
+        ('538Y042219', 11707,  1043.93, 'RUPTURE J+12'),
+        ('586L015592',  1007,   964.89, 'OK'),
+        ('584C110991',   376,  1031.48, 'OK'),
+        ('538Y041201',  1359,  1091.11, 'OK'),
+        ('584W011710',     0,  1078.42, 'RUPTURE STOCK'),
+        ('584C110457',  1339,   909.38, 'RUPTURE J+10'),
+        ('584C113270',     0,   960.46, 'RUPTURE STOCK'),
+        ('584W010711',     0,   992.09, 'RUPTURE STOCK'),
+        ('538Y042606',  1154,  1016.21, 'RUPTURE J+11'),
+        ('538Y030905',   526,  1078.73, 'RUPTURE J+4'),
+        ('584C030965',     0,  1022.14, 'RUPTURE STOCK'),
+        ('538Y042632',   628,  1062.98, 'RUPTURE J+11'),
+        ('536Y200600',     0,   910.04, 'RUPTURE STOCK'),
+        ('588W662595', 23405,  1018.07, 'RUPTURE J+6'),
+        ('584C030232',   108,   943.49, 'OK'),
+        ('538Y042626',    43,  1083.86, 'RUPTURE J+16'),
+        ('584J250350',  4834,  1062.52, 'OK'),
+        ('586M038493',   225,  1031.73, 'OK'),
+        ('584C110023',   457,   906.18, 'OK'),
+        ('586L015590',     0,   991.98, 'RUPTURE STOCK'),
+        ('584J250270',  8802,   908.66, 'OK'),
+        ('588W662525',     0,  1004.16, 'RUPTURE STOCK'),
+    ]
 
-    conso_moy = 40
     lignes = []
-    for item, stock in stocks_reels.items():
-        jours_restants = 0 if stock == 0 else int(stock / conso_moy)
-        besoin_30j = round(conso_moy * 30, 2)
-        couverture_pct = min(100, round(stock / besoin_30j * 100)) if besoin_30j > 0 else 0
+    for code, stock, besoin, alerte in raw:
+        # Extraire les jours restants depuis l'alerte LSTM
+        if alerte == 'RUPTURE STOCK':
+            jours_restants = 0
+        elif alerte.startswith('RUPTURE J+'):
+            jours_restants = int(alerte.replace('RUPTURE J+', ''))
+        else:  # OK
+            # Estimation : stock / (besoin/30)
+            conso_jour = besoin / 30
+            jours_restants = int(stock / conso_jour) if conso_jour > 0 else 999
+            jours_restants = min(jours_restants, 999)
 
-        if stock == 0:
-            statut = "RUPTURE"
+        couverture_pct = min(100, round(stock / besoin * 100, 1)) if besoin > 0 else 0
+
+        # Statut unifié basé sur l'alerte LSTM
+        if alerte == 'RUPTURE STOCK':
+            statut  = 'RUPTURE'
             priorite = 0
-        elif jours_restants <= 7:
-            statut = "CRITIQUE"
-            priorite = 1
-        elif jours_restants <= 30:
-            statut = "ATTENTION"
-            priorite = 2
+        elif alerte.startswith('RUPTURE J+'):
+            j = jours_restants
+            if j <= 7:
+                statut   = 'CRITIQUE'
+                priorite = 1
+            elif j <= 15:
+                statut   = 'ATTENTION'
+                priorite = 2
+            else:
+                statut   = 'ATTENTION'
+                priorite = 2
         else:
-            statut = "OK"
+            statut   = 'OK'
             priorite = 3
 
         lignes.append({
-            'Code Article':       item,
-            'Stock Actuel':       stock,
-            'Besoin 30j':         besoin_30j,
-            'Jours Restants':     jours_restants,
-            'Couverture (%)':     couverture_pct,
-            'Statut':             statut,
-            'Priorité':           priorite
+            'Code Article':      code,
+            'Stock Actuel':      stock,
+            'Besoin Prévu (30j)': besoin,
+            'Jours Restants':    jours_restants,
+            'Couverture (%)':    couverture_pct,
+            'Alerte LSTM':       alerte,
+            'Statut':            statut,
+            'Priorité':          priorite
         })
-    return pd.DataFrame(lignes).sort_values('Priorité')
+
+    return pd.DataFrame(lignes).sort_values(['Priorité', 'Jours Restants']).reset_index(drop=True)
 
 df = load_data()
 
@@ -564,32 +597,53 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Préparation tableau
-def format_statut(s):
-    icons = {'RUPTURE': '💥 RUPTURE', 'CRITIQUE': '⚠️ CRITIQUE', 'ATTENTION': '🔶 ATTENTION', 'OK': '✅ OK'}
-    return icons.get(s, s)
+def format_alerte(a):
+    if a == 'RUPTURE STOCK':
+        return '🔴 RUPTURE STOCK'
+    elif a.startswith('RUPTURE J+'):
+        j = a.replace('RUPTURE J+', '')
+        return f'🟠 RUPTURE J+{j}'
+    else:
+        return '✅ OK'
 
 df_display = df_f.copy()
-df_display['Statut Affiché'] = df_display['Statut'].map(format_statut)
+df_display['Alerte Système'] = df_display['Alerte LSTM'].map(format_alerte)
 df_display['Couverture'] = df_display['Couverture (%)'].apply(lambda x: f"{x}%")
 
-cols_show = ['Code Article', 'Stock Actuel', 'Besoin 30j', 'Jours Restants', 'Couverture', 'Statut Affiché']
-df_show = df_display[cols_show].rename(columns={'Statut Affiché': 'Statut'})
+COLS = ['Code Article', 'Stock Actuel', 'Besoin Prévu (30j)', 'Jours Restants', 'Couverture', 'Alerte Système']
+df_show = df_display[COLS]
 
 def color_row(row):
     stat = df_display.loc[row.name, 'Statut']
-    if stat == 'RUPTURE':
-        return ['color: #FF6B75; font-weight:600' if c in ['Stock Actuel','Statut Affiché'] else '' for c in cols_show]
-    elif stat == 'CRITIQUE':
-        return ['color: #F4722B; font-weight:600' if c in ['Stock Actuel','Statut Affiché'] else '' for c in cols_show]
-    elif stat == 'ATTENTION':
-        return ['color: #F0A500; font-weight:600' if c in ['Stock Actuel','Statut Affiché'] else '' for c in cols_show]
-    else:
-        return ['color: #2DC653; font-weight:600' if c == 'Statut Affiché' else '' for c in cols_show]
+    alerte_col = 'Alerte Système'
+    styles = []
+    for c in COLS:
+        if stat == 'RUPTURE':
+            if c in ['Stock Actuel', alerte_col]:
+                styles.append('color: #FF6B75; font-weight: 700')
+            else:
+                styles.append('')
+        elif stat == 'CRITIQUE':
+            if c in ['Stock Actuel', alerte_col]:
+                styles.append('color: #F4722B; font-weight: 700')
+            else:
+                styles.append('')
+        elif stat == 'ATTENTION':
+            if c in ['Stock Actuel', alerte_col]:
+                styles.append('color: #F0A500; font-weight: 700')
+            else:
+                styles.append('')
+        else:
+            if c == alerte_col:
+                styles.append('color: #2DC653; font-weight: 700')
+            else:
+                styles.append('')
+    return styles
 
 st.dataframe(
-    df_show.style.apply(color_row, axis=1),
+    df_show.style.apply(color_row, axis=1).format({'Besoin Prévu (30j)': '{:.2f}'}),
     use_container_width=True,
-    height=420
+    height=460
 )
 
 # ─── Actions recommandées ────────────────────────────────────────────────────
