@@ -353,39 +353,79 @@ with st.sidebar:
         default=["RUPTURE", "CRITIQUE", "ATTENTION", "OK"]
     )
 
-    seuil_jours = st.slider("Horizon d'alerte (jours)", 1, 90, 30)
+    st.markdown("---")
+    st.markdown("### 📅 Horizon d'analyse")
+
+    seuil_jours = st.slider(
+        "Horizon (jours)",
+        min_value=7, max_value=90, value=30, step=1,
+        help="Modifie la fenêtre temporelle du graphique et recalcule les statuts"
+    )
+
+    # Seuils dérivés automatiquement de l'horizon
+    seuil_critique  = max(3,  round(seuil_jours * 0.20))   # 20% de l'horizon
+    seuil_attention = seuil_jours                            # = l'horizon complet
+
+    st.markdown(f"""
+    <div style="background:#1C2330; border:1px solid #2A3340; border-radius:8px;
+                padding:0.75rem 1rem; margin-top:0.5rem; font-size:0.78rem; line-height:2;">
+        <div>🔴 <strong style="color:#E63946;">Rupture stock</strong> — stock = 0</div>
+        <div>🟠 <strong style="color:#F4722B;">Critique</strong> — ≤ {seuil_critique} j</div>
+        <div>🟡 <strong style="color:#F0A500;">Attention</strong> — ≤ {seuil_attention} j</div>
+        <div>🟢 <strong style="color:#2DC653;">OK</strong> — > {seuil_attention} j</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("""
     <div style="font-size:0.72rem; color:#7A8599; line-height:1.6;">
         <strong style="color:#F0A500;">Direction Approvisionnement<br>et Transport (DAT)</strong><br><br>
-        Modèle LSTM · Horizon 30j<br>
-        Seuil critique : <strong style="color:#E63946;">≤ 7 jours</strong><br>
-        Seuil attention : <strong style="color:#F4722B;">≤ 30 jours</strong>
+        Modèle LSTM · Données réelles
     </div>
     """, unsafe_allow_html=True)
 
-# ─── Filtrage ────────────────────────────────────────────────────────────────
-df_f = df[df['Statut'].isin(filtre_statut)]
+# ─── Recalcul dynamique des statuts selon l'horizon choisi ──────────────────
+def recalc_statut(row, seuil_crit, seuil_att):
+    """Recalcule le statut en fonction des seuils dynamiques."""
+    j = row['Jours Restants']
+    if row['Stock Actuel'] == 0:
+        return 'RUPTURE'
+    elif j <= seuil_crit:
+        return 'CRITIQUE'
+    elif j <= seuil_att:
+        return 'ATTENTION'
+    else:
+        return 'OK'
+
+df_dyn = df.copy()
+df_dyn['Statut'] = df_dyn.apply(
+    lambda r: recalc_statut(r, seuil_critique, seuil_attention), axis=1
+)
+df_dyn['Priorité'] = df_dyn['Statut'].map(
+    {'RUPTURE': 0, 'CRITIQUE': 1, 'ATTENTION': 2, 'OK': 3}
+)
+df_dyn = df_dyn.sort_values(['Priorité', 'Jours Restants']).reset_index(drop=True)
+
+df_f = df_dyn[df_dyn['Statut'].isin(filtre_statut)]
 
 # ─── Bannière ────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <div class="hero-banner">
     <div>
         <p class="hero-title">🛢️ Tableau de Bord Prédictif — Gestion de Stock</p>
-        <p class="hero-sub">Direction Approvisionnement et Transport · Modèle LSTM · Horizon 30 jours</p>
+        <p class="hero-sub">Direction Approvisionnement et Transport · Modèle LSTM · Horizon <strong style="color:#F0A500;">{seuil_jours} jours</strong></p>
     </div>
-    <div class="hero-badge">⚡ Temps Réel</div>
+    <div class="hero-badge">⚡ Horizon J+{seuil_jours}</div>
 </div>
 """, unsafe_allow_html=True)
 
 # ─── KPIs ─────────────────────────────────────────────────────────────────────
-n_rupture  = len(df[df['Statut'] == 'RUPTURE'])
-n_critique = len(df[df['Statut'] == 'CRITIQUE'])
-n_attention= len(df[df['Statut'] == 'ATTENTION'])
-n_ok       = len(df[df['Statut'] == 'OK'])
-stock_total= df['Stock Actuel'].sum()
-taux_dispo = round(n_ok / len(df) * 100, 1)
+n_rupture  = len(df_dyn[df_dyn['Statut'] == 'RUPTURE'])
+n_critique = len(df_dyn[df_dyn['Statut'] == 'CRITIQUE'])
+n_attention= len(df_dyn[df_dyn['Statut'] == 'ATTENTION'])
+n_ok       = len(df_dyn[df_dyn['Statut'] == 'OK'])
+stock_total= df_dyn['Stock Actuel'].sum()
+taux_dispo = round(n_ok / len(df_dyn) * 100, 1)
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -404,7 +444,7 @@ with col2:
     <div class="kpi-card warning">
         <span class="kpi-icon">⚠️</span>
         <div class="kpi-value">{n_critique}</div>
-        <div class="kpi-label">Alertes Critiques ≤ 7j</div>
+        <div class="kpi-label">Alertes Critiques ≤ {seuil_critique}j</div>
         <div class="kpi-delta warn">▲ Action immédiate requise</div>
     </div>
     """, unsafe_allow_html=True)
@@ -414,8 +454,8 @@ with col3:
     <div class="kpi-card info">
         <span class="kpi-icon">🔶</span>
         <div class="kpi-value">{n_attention}</div>
-        <div class="kpi-label">Articles en Surveillance</div>
-        <div class="kpi-delta warn">Horizon &lt; 30 jours</div>
+        <div class="kpi-label">Surveillance ≤ {seuil_attention}j</div>
+        <div class="kpi-delta warn">Horizon sélectionné</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -446,7 +486,7 @@ with col_left:
     # Trier par jours restants (critiques en haut)
     df_gantt = df_f.sort_values('Jours Restants', ascending=True).reset_index(drop=True)
     n_items = len(df_gantt)
-    HORIZON = 30
+    HORIZON = seuil_jours   # ← horizon dynamique depuis le slider
     BAR_H   = 0.62
     PAD     = 0.19
 
@@ -511,11 +551,17 @@ with col_left:
     # Ligne verticale "Aujourd'hui"
     ax.axvline(x=0, color='#F0A500', linewidth=1.5, linestyle='--', alpha=0.5, zorder=5)
 
-    # Grille verticale légère aux jalons
-    for x_mark in [7, 14, 21, 30]:
-        ax.axvline(x=x_mark, color='#2A3340', linewidth=0.8, linestyle='-', zorder=0)
-        ax.text(x_mark, -0.5, f"J{x_mark}",
-                ha='center', va='top', fontsize=7.5, color='#7A8599')
+    # Grille verticale aux jalons (dynamiques selon horizon)
+    jalons = sorted(set([
+        seuil_critique,
+        seuil_attention // 2 if seuil_attention > 14 else seuil_attention,
+        seuil_attention
+    ]))
+    for x_mark in jalons:
+        if x_mark <= HORIZON:
+            ax.axvline(x=x_mark, color='#2A3340', linewidth=0.8, linestyle='-', zorder=0)
+            ax.text(x_mark, -0.5, f"J{x_mark}",
+                    ha='center', va='top', fontsize=7.5, color='#7A8599')
 
     # Axes
     ax.set_xlim(-0.5, HORIZON + 0.2)
@@ -529,9 +575,9 @@ with col_left:
 
     # Légende
     leg_items = [
-        mpatches.Patch(color='#2DC653', alpha=0.88, label='OK  — stock suffisant'),
-        mpatches.Patch(color='#F0A500', alpha=0.88, label='Attention  — ≤ 30j'),
-        mpatches.Patch(color='#F4722B', alpha=0.88, label='Critique  — ≤ 7j'),
+        mpatches.Patch(color='#2DC653', alpha=0.88, label=f'OK  — > J+{seuil_attention}'),
+        mpatches.Patch(color='#F0A500', alpha=0.88, label=f'Attention  — ≤ J+{seuil_attention}'),
+        mpatches.Patch(color='#F4722B', alpha=0.88, label=f'Critique  — ≤ J+{seuil_critique}'),
         mpatches.Patch(color='#E63946', alpha=0.88, label='Rupture  — stock nul'),
     ]
     ax.legend(handles=leg_items, loc='lower right', fontsize=8,
@@ -654,8 +700,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-ruptures  = df[df['Statut'] == 'RUPTURE']['Code Article'].tolist()
-critiques = df[df['Statut'] == 'CRITIQUE']['Code Article'].tolist()
+ruptures  = df_dyn[df_dyn['Statut'] == 'RUPTURE']['Code Article'].tolist()
+critiques = df_dyn[df_dyn['Statut'] == 'CRITIQUE']['Code Article'].tolist()
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -694,10 +740,12 @@ with c3:
     """, unsafe_allow_html=True)
 
 # ─── Footer ──────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <div style="margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #2A3340;
             text-align: center; color: #7A8599; font-size: 0.72rem;">
     Sonatrach · DAT · Système de Prédiction des Ruptures de Stock — Modèle LSTM
-    &nbsp;|&nbsp; Données actualisées en temps réel &nbsp;|&nbsp; <strong style="color:#F0A500;">v2.0</strong>
+    &nbsp;|&nbsp; Horizon actif : <strong style="color:#F0A500;">J+{seuil_jours}</strong>
+    &nbsp;|&nbsp; Critique ≤ {seuil_critique}j · Attention ≤ {seuil_attention}j
+    &nbsp;|&nbsp; <strong style="color:#F0A500;">v2.1</strong>
 </div>
 """, unsafe_allow_html=True)
