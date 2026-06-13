@@ -333,6 +333,15 @@ def load_data():
 
 df = load_data()
 
+# ─── Session state — articles ajoutés dynamiquement ──────────────────────────
+if 'articles_extra' not in st.session_state:
+    st.session_state.articles_extra = []
+
+# Fusion des articles ajoutés avec les données de base
+if st.session_state.articles_extra:
+    df_extra = pd.DataFrame(st.session_state.articles_extra)
+    df = pd.concat([df, df_extra], ignore_index=True)
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
@@ -375,6 +384,206 @@ with st.sidebar:
         <div>🟢 <strong style="color:#2DC653;">OK</strong> — > {seuil_attention} j</div>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("### ➕ Nouvel Article")
+
+    with st.expander("📂 Importer un historique", expanded=False):
+        st.markdown("""
+        <div style="font-size:0.78rem; color:#7A8599; line-height:1.7; margin-bottom:0.8rem;">
+            Téléchargez l'historique de consommation (5 ans) d'un article.<br>
+            Format accepté : <strong style="color:#E8EAF0;">CSV ou Excel (.xlsx)</strong><br>
+            Colonnes requises : <code style="color:#F0A500;">date</code> · <code style="color:#F0A500;">consommation</code>
+        </div>
+        """, unsafe_allow_html=True)
+
+        new_code = st.text_input(
+            "Code Article",
+            placeholder="ex: 584C999888",
+            max_chars=20,
+            key="upload_code"
+        ).strip().upper()
+
+        new_stock_upload = st.number_input(
+            "Stock Actuel (unités)",
+            min_value=0, step=1, value=0,
+            key="upload_stock"
+        )
+
+        uploaded_file = st.file_uploader(
+            "Historique consommation",
+            type=["csv", "xlsx"],
+            help="Fichier avec colonnes 'date' et 'consommation'"
+        )
+
+        if uploaded_file is not None:
+            try:
+                # Lecture du fichier
+                if uploaded_file.name.endswith('.xlsx'):
+                    df_hist = pd.read_excel(uploaded_file)
+                else:
+                    df_hist = pd.read_csv(uploaded_file, sep=None, engine='python')
+
+                # Normaliser les noms de colonnes
+                df_hist.columns = [c.strip().lower() for c in df_hist.columns]
+
+                # Chercher colonnes date et consommation
+                col_date = next((c for c in df_hist.columns if 'date' in c), None)
+                col_conso = next((c for c in df_hist.columns
+                                  if any(k in c for k in ['conso', 'quantit', 'qty', 'mouvement', 'sortie'])), None)
+
+                if col_date is None or col_conso is None:
+                    st.error(f"❌ Colonnes introuvables. Colonnes détectées : {list(df_hist.columns)}")
+                else:
+                    df_hist[col_date]  = pd.to_datetime(df_hist[col_date], errors='coerce')
+                    df_hist[col_conso] = pd.to_numeric(df_hist[col_conso], errors='coerce')
+                    df_hist = df_hist.dropna(subset=[col_date, col_conso])
+                    df_hist = df_hist.sort_values(col_date)
+
+                    n_lignes = len(df_hist)
+                    date_min = df_hist[col_date].min().strftime('%d/%m/%Y')
+                    date_max = df_hist[col_date].max().strftime('%d/%m/%Y')
+                    conso_totale = df_hist[col_conso].sum()
+
+                    # ── Aperçu ──
+                    st.markdown(f"""
+                    <div style="background:#0F1A0F; border:1px solid #1A3A1A; border-radius:8px;
+                                padding:0.75rem 1rem; font-size:0.78rem; line-height:2; margin:0.5rem 0;">
+                        <div>📅 <strong style="color:#E8EAF0;">Période :</strong>
+                             <span style="color:#2DC653;">{date_min} → {date_max}</span></div>
+                        <div>📋 <strong style="color:#E8EAF0;">Lignes :</strong>
+                             <span style="color:#2DC653;">{n_lignes:,}</span></div>
+                        <div>📦 <strong style="color:#E8EAF0;">Conso totale :</strong>
+                             <span style="color:#2DC653;">{conso_totale:,.0f} unités</span></div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── Simulation prédiction LSTM ──────────────────────────────
+                    # Calcul de la consommation mensuelle sur les 6 derniers mois
+                    derniers_6m = df_hist[
+                        df_hist[col_date] >= df_hist[col_date].max() - pd.DateOffset(months=6)
+                    ]
+                    conso_jour_recent = (
+                        derniers_6m[col_conso].sum() / max(1, (derniers_6m[col_date].max()
+                        - derniers_6m[col_date].min()).days)
+                    ) if len(derniers_6m) > 1 else conso_totale / max(1, n_lignes)
+
+                    # Saisonnalité : ratio dernier mois vs moyenne
+                    dernier_mois = df_hist[
+                        df_hist[col_date] >= df_hist[col_date].max() - pd.DateOffset(months=1)
+                    ]
+                    conso_dernier_mois = dernier_mois[col_conso].sum()
+                    conso_moy_mensuelle = conso_totale / max(1, n_lignes / 30)
+                    facteur_saison = min(2.0, max(0.5, conso_dernier_mois / conso_moy_mensuelle)) \
+                                     if conso_moy_mensuelle > 0 else 1.0
+
+                    # Besoin prévu sur 30j (avec saisonnalité)
+                    besoin_30j_pred = round(conso_jour_recent * 30 * facteur_saison, 2)
+                    besoin_30j_pred = max(besoin_30j_pred, 1.0)
+
+                    # Jours restants estimés
+                    jr_pred = int(new_stock_upload / conso_jour_recent) \
+                              if conso_jour_recent > 0 else 999
+
+                    # Alerte
+                    if new_stock_upload == 0:
+                        alerte_pred = 'RUPTURE STOCK'
+                    elif jr_pred <= 30:
+                        alerte_pred = f'RUPTURE J+{jr_pred}'
+                    else:
+                        alerte_pred = 'OK'
+
+                    couv_pred = min(100, round(new_stock_upload / besoin_30j_pred * 100, 1)) \
+                                if besoin_30j_pred > 0 else 0
+
+                    # Couleur alerte
+                    if alerte_pred == 'RUPTURE STOCK':
+                        clr_a = '#E63946'; icon_a = '🔴'
+                    elif alerte_pred.startswith('RUPTURE'):
+                        clr_a = '#F4722B' if jr_pred <= seuil_critique else '#F0A500'
+                        icon_a = '🟠'
+                    else:
+                        clr_a = '#2DC653'; icon_a = '🟢'
+
+                    st.markdown(f"""
+                    <div style="background:#1A1108; border:1px solid #4A3010; border-radius:8px;
+                                padding:0.85rem 1rem; font-size:0.78rem; line-height:2.1; margin:0.5rem 0;">
+                        <div style="font-family:'Syne',sans-serif; font-size:0.85rem;
+                                    font-weight:700; color:#F0A500; margin-bottom:0.3rem;">
+                            ⚡ Prédiction LSTM
+                        </div>
+                        <div>📦 <strong style="color:#E8EAF0;">Besoin prévu (30j) :</strong>
+                             <span style="color:#FFD166;">{besoin_30j_pred:,.2f}</span></div>
+                        <div>📅 <strong style="color:#E8EAF0;">Jours restants :</strong>
+                             <span style="color:#FFD166;">J+{jr_pred}</span></div>
+                        <div>📊 <strong style="color:#E8EAF0;">Couverture :</strong>
+                             <span style="color:#FFD166;">{couv_pred}%</span></div>
+                        <div>🔔 <strong style="color:#E8EAF0;">Alerte système :</strong>
+                             <span style="color:{clr_a}; font-weight:700;">{icon_a} {alerte_pred}</span></div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── Bouton Ajouter ───────────────────────────────────────
+                    if st.button("✅ Ajouter au Dashboard", use_container_width=True,
+                                 key="btn_add_upload"):
+                        if not new_code:
+                            st.error("❌ Entrez un code article.")
+                        else:
+                            codes_existants = [r['Code Article']
+                                               for r in st.session_state.articles_extra]
+                            if new_code in df['Code Article'].values \
+                                    or new_code in codes_existants:
+                                st.warning(f"⚠️ L'article **{new_code}** existe déjà.")
+                            else:
+                                new_row = {
+                                    'Code Article':       new_code,
+                                    'Stock Actuel':       int(new_stock_upload),
+                                    'Besoin Prévu (30j)': float(besoin_30j_pred),
+                                    'Jours Restants':     jr_pred,
+                                    'Couverture (%)':     couv_pred,
+                                    'Alerte LSTM':        alerte_pred,
+                                    'Statut':             'OK',
+                                    'Priorité':           3
+                                }
+                                st.session_state.articles_extra.append(new_row)
+                                st.success(f"✅ Article **{new_code}** ajouté au dashboard !")
+                                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Erreur de lecture : {e}")
+
+        else:
+            # Template téléchargeable
+            template_csv = "date,consommation\n2020-01-01,45\n2020-01-02,38\n2020-01-03,52\n"
+            st.download_button(
+                label="📥 Télécharger un modèle CSV",
+                data=template_csv,
+                file_name="historique_template.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+    # ── Articles ajoutés ──────────────────────────────────────────────────────
+    if st.session_state.articles_extra:
+        st.markdown(f"""
+        <div style="font-size:0.78rem; color:#F0A500; font-weight:600; margin:0.6rem 0 0.3rem;">
+            📦 {len(st.session_state.articles_extra)} article(s) importé(s)
+        </div>""", unsafe_allow_html=True)
+
+        for i, art in enumerate(st.session_state.articles_extra):
+            c_a, c_b = st.columns([4, 1])
+            c_a.markdown(
+                f"<span style='font-size:0.75rem; font-family:monospace; "
+                f"color:#E8EAF0;'>{art['Code Article']}</span>",
+                unsafe_allow_html=True
+            )
+            if c_b.button("🗑️", key=f"del_{i}", help="Supprimer"):
+                st.session_state.articles_extra.pop(i)
+                st.rerun()
+
+        if st.button("🗑️ Tout supprimer", use_container_width=True):
+            st.session_state.articles_extra = []
+            st.rerun()
 
     st.markdown("---")
     st.markdown("""
